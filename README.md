@@ -8,8 +8,12 @@ npm install
 npm run dev       # http://localhost:5173
 npm run sync      # pull the latest markdown from the gist
 npm run content   # regenerate chapters from content/
+npm run review    # what the source could do better (never fatal)
 npm run build     # runs `content` first
 ```
+
+**Writing content?** See [AUTHORING.md](./AUTHORING.md) — conventions, both
+authoring routes, and what each fence language renders as.
 
 ## The content pipeline
 
@@ -27,6 +31,12 @@ gist  --[ sync-content.mjs ]-->  content/  --[ build-content.mjs ]-->  src/
 | --- | --- | --- |
 | `sync-content.mjs` | mirror the gist into `content/` | parse anything |
 | `build-content.mjs` | derive chapters and metadata | touch the network |
+
+`npm run review` reports where the pipeline is *guessing* — ambiguous fences,
+untagged chapters, colliding titles. Nothing it finds stops a build; the
+markdown is written by someone who is not thinking about this renderer, and it
+should stay that way. But every note is a place the page can be wrong, so it is
+the list worth sending upstream.
 
 Generated output, none of it hand-maintained:
 
@@ -64,17 +74,33 @@ is hardcoded anywhere**. Add a document to the gist and it arrives; remove one
 and it goes. Override the gist with `GIST_ID=...`, and set `GITHUB_TOKEN` if you
 hit the anonymous rate limit.
 
+It records what it fetched in `content/.synced.json` and will only ever delete
+files on that list, so a locally authored document sitting alongside the synced
+ones is never touched. The two routes in [AUTHORING.md](./AUTHORING.md) coexist.
+
 ### How a new document places itself
 
 Documents are classified by what they contain, not what they are called:
 
 | Signal in the document | Result |
 | --- | --- |
-| contains `# Part VII - ...` headings | the core cookbook — runs second, keeps its own parts |
+| has `# Part ...` **and the most `[CKAD]` sections** | the core cookbook — supplies the landing page, volume *The cookbook* |
+| has `# Part ...` otherwise | a companion handbook — keeps its own parts, gets a volume named after itself |
 | opens `# Supplemental - ...` | front matter, runs first |
-| opens `# Appendix C - ...` | runs after the cookbook, in letter order |
+| opens `# Appendix C - ...` | runs after the companions, in letter order |
 | opens `# Appendix - ...` with no letter | gets the next free letter automatically |
 | anything else | runs last, alphabetically |
+
+More than one document supplies `# Part` headings, so "has parts" cannot mean
+"is the course". The primary text is the part-bearing document carrying the most
+`[CKAD]` sections — this is a CKAD course, so that is what *the cookbook* means
+here. Everything else with parts is a companion and keeps its own structure.
+
+Tags are read from the **end** of a heading rather than matched against a fixed
+list, so a document that invents a marker (`[OPS]`, `[PLATFORM]`) still gets a
+clean title, contributes to the `Tag` union, and adds its own line to the legend
+on the landing page. Unknown markers render with the neutral flag rather than
+failing the build.
 
 The document's title becomes the part; its opening section becomes that part's
 first chapter, titled *Introduction*, so nothing in the source is dropped.

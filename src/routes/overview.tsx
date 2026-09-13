@@ -1,17 +1,12 @@
 import { cn } from 'cn'
 import { ArrowUpRight, Check, RotateCcw } from 'lucide-react'
 import { Link } from 'react-router'
-import { AppShell, Flag, Sounding } from '@/components/app-shell'
+import { AppShell, Flag, Sounding, TagFlag } from '@/components/app-shell'
 import { CompassRose, DepthContours } from '@/components/chart-marks'
 import { FigureBlock } from '@/components/code'
-import { flatChapters, formatDuration, getChapter, intro, parts, totals, type Tag } from '@/data/course'
+import { flatChapters, formatDuration, getChapter, intro, parts, totals } from '@/data/course'
 import { useProgress } from '@/lib/use-progress'
 
-const tagTone: Record<Tag, 'kilo' | 'signal' | 'quiet'> = {
-  CKAD: 'kilo',
-  DEV: 'quiet',
-  'DEEP DIVE': 'signal',
-}
 
 export function Overview() {
   const { started, resumeId, doneCount, total, fraction, minutesLeft, isDone, reset } = useProgress()
@@ -142,8 +137,8 @@ export function Overview() {
             <dl className="mt-9 space-y-5 border-t border-rule pt-7">
               {intro.legend.map(({ tag, meaning }) => (
                 <div key={tag} className="flex gap-4">
-                  <dt className="w-[5.5rem] shrink-0 pt-px">
-                    <Flag tone={tagTone[tag]}>{tag}</Flag>
+                  <dt className="w-[6.5rem] shrink-0 pt-px">
+                    <TagFlag tag={tag} />
                   </dt>
                   <dd className="text-sm leading-relaxed text-ink-2">{meaning}</dd>
                 </div>
@@ -230,9 +225,7 @@ export function Overview() {
                                 {chapter.title}
                               </h4>
                               {chapter.tags.map((tag) => (
-                                <Flag key={tag} tone={tagTone[tag]}>
-                                  {tag}
-                                </Flag>
+                                <TagFlag key={tag} tag={tag} />
                               ))}
                               <span className="mono ml-auto shrink-0 text-[0.65rem] text-ink-3">
                                 {chapter.minutes} min

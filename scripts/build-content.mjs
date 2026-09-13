@@ -36,16 +36,32 @@ const PINNED_KEYS = {
   'cillium-gateay-appendix.md': 'd',
 }
 
-const VOLUMES = ['Supplemental', 'The cookbook', 'Beyond the exam']
+/** Rail groupings. A companion handbook supplies its own, named after itself. */
+const VOLUME = {
+  supplemental: 'Supplemental',
+  cookbook: 'The cookbook',
+  beyond: 'Beyond the exam',
+}
 
 const NOISE = /^(appendix|appendices|quickstart|cheatsheet|md|the|and|for|a|an)$/i
+
+/**
+ * A leading number in the filename is an explicit running order —
+ * `01-intro.md`, `02-pods.md`. It is a position, not part of the name, so it
+ * does not reach the id. Documents without one fall back to being placed by
+ * what they contain.
+ */
+function fileOrder(filename) {
+  const m = filename.match(/^(\d+)[-_. ]/)
+  return m ? Number(m[1]) : null
+}
 
 function deriveKey(filename, taken) {
   const words = filename
     .replace(/\.md$/, '')
     .split(/[^A-Za-z0-9]+/)
-    .filter((w) => w && !NOISE.test(w))
-  let key = (words.map((w) => w[0]).join('') || filename.slice(0, 3)).toLowerCase()
+    .filter((w) => w && !/^\d+$/.test(w) && !NOISE.test(w))
+  let key = (words.map((w) => w[0]).join('') || 'doc').toLowerCase()
   let n = 2
   const base = key
   while (taken.has(key)) key = `${base}${n++}`
@@ -60,18 +76,24 @@ const slug = (s) =>
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
 
-/** `[CKAD] [DEV] [DEEP DIVE]` markers the author puts in headings. */
+/**
+ * `[CKAD] [DEV] [OPS] [PLATFORM] [DEEP DIVE]` markers the authors put in
+ * headings. Taken from the end of the heading rather than matched against a
+ * fixed list, so a document that invents a new marker still gets a clean title
+ * — and a bracketed phrase inside a title is never mistaken for a tag.
+ */
 function takeTags(title) {
   const tags = []
-  const cleaned = title
-    .replace(/\[(CKAD|DEV|DEEP DIVE)\]/g, (_, t) => {
-      tags.push(t)
-      return ''
-    })
-    .replace(/`/g, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-  return { title: cleaned, tags }
+  let cleaned = title.replace(/`/g, '').trim()
+
+  for (;;) {
+    const m = cleaned.match(/\s*\[([A-Z][A-Z ]{1,18})\]$/)
+    if (!m) break
+    tags.unshift(m[1].trim())
+    cleaned = cleaned.slice(0, m.index).trim()
+  }
+
+  return { title: cleaned.replace(/\s+/g, ' ').trim(), tags }
 }
 
 /** The author numbers sections; keep his numbering rather than inventing one. */
@@ -177,14 +199,6 @@ function readPreamble(body) {
 
   const target = body.match(/^\*\*Target:\*\*\s*(.+)$/m)?.[1]?.trim() ?? null
 
-  const legend = [...body.matchAll(/^-\s*\*\*\[([A-Z ]+)\]\*\*\s*[-–—]\s*(.+)$/gm)].map(
-    ([, tag, meaning]) => ({
-      tag,
-      // list items in the source, sentences on the page
-      meaning: `${meaning.trim().charAt(0).toUpperCase()}${meaning.trim().slice(1).replace(/\.$/, '')}.`,
-    }),
-  )
-
   // the first drawn block is the teaching loop
   const diagram = body.match(/^```\w*\n([\s\S]*?)^```/m)?.[1]?.replace(/\n$/, '') ?? null
 
@@ -192,9 +206,22 @@ function readPreamble(body) {
     // the opening statement of intent, before the bookkeeping starts
     intro: prose.filter((p) => !p.startsWith('Target:')).slice(0, 3).join(' '),
     target,
-    legend,
     diagram,
   }
+}
+
+/**
+ * `- **[OPS]** - operating delivery systems`. Every document may define its own
+ * markers, so the legend on the landing page is the union of all of them.
+ */
+function readLegend(body) {
+  return [...body.matchAll(/^-\s*\*\*\[([A-Z][A-Z ]*)\]\*\*\s*[-–—]\s*(.+)$/gm)].map(
+    ([, tag, meaning]) => {
+      const text = meaning.trim().replace(/\.$/, '')
+      // list items in the source, sentences on the page
+      return { tag: tag.trim(), meaning: `${text.charAt(0).toUpperCase()}${text.slice(1)}.` }
+    },
+  )
 }
 
 function subheadings(body) {
@@ -223,38 +250,69 @@ function measure(body) {
 }
 
 /**
- * What kind of document is this? Decided from its own headings.
- *  - it contains `# Part ...`            -> the core cookbook
- *  - it opens "Supplemental - ..."       -> front matter, runs first
- *  - it opens "Appendix X - ..."         -> runs after the cookbook, in letter order
- *  - anything else                       -> runs last, alphabetically
+ * Structural facts about a document, read from its own headings.
+ *
+ * Note what is deliberately *not* decided here: whether a document is the
+ * primary one. More than one document supplies `# Part ...` headings — the
+ * cookbook and the GitOps handbook both do — so "has parts" cannot mean "is
+ * the course". That is settled across the whole set in `assignRoles`.
  */
 function classify(sections) {
   const head = takeTags(sections[0].heading).title
-
-  if (sections.some((s) => /^Part\s+[IVXLC]+\b/.test(takeTags(s.heading).title))) {
-    return { rank: 1, role: 'cookbook', title: head, letter: null }
-  }
+  const hasParts = sections.some((s) => /^Part\s+[IVXLC]+\b/.test(takeTags(s.heading).title))
+  const ckad = sections.filter((s) => takeTags(s.heading).tags.includes('CKAD')).length
 
   const supplemental = head.match(/^Supplementa(?:l|ry)\s*[-–—:]\s*(.*)$/i)
-  if (supplemental) {
-    return { rank: 0, role: 'document', title: supplemental[1], letter: '0' }
-  }
+  if (supplemental) return { kind: 'supplemental', title: supplemental[1], numeral: '0', hasParts, ckad }
 
   const appendix = head.match(/^Appendix\s*([A-Z])?\s*[-–—:]\s*(.*)$/i)
-  if (appendix) {
-    return { rank: 2, role: 'document', title: appendix[2], letter: appendix[1] ?? null }
-  }
+  if (appendix) return { kind: 'appendix', title: appendix[2], numeral: appendix[1] ?? null, hasParts, ckad }
 
-  return { rank: 3, role: 'document', title: head, letter: null }
+  return { kind: 'standalone', title: head, numeral: null, hasParts, ckad }
+}
+
+/**
+ * Decide what each document is *for*, now that we can see all of them.
+ *
+ * The primary text is the part-bearing document carrying the most `[CKAD]`
+ * sections — this is a CKAD course, so that is what "the cookbook" means here.
+ * Other part-bearing documents are companion handbooks: they keep their own
+ * parts and get a volume of their own rather than being folded into the course.
+ */
+function assignRoles(documents) {
+  const parted = documents.filter((d) => d.hasParts)
+  const primary = parted.slice().sort((a, b) => b.ckad - a.ckad)[0]
+
+  for (const doc of documents) {
+    if (doc === primary) {
+      doc.role = 'cookbook'
+      doc.rank = 1
+      doc.volume = VOLUME.cookbook
+    } else if (doc.hasParts) {
+      doc.role = 'series'
+      doc.rank = 2
+      doc.volume = doc.title
+    } else if (doc.kind === 'supplemental') {
+      doc.role = 'document'
+      doc.rank = 0
+      doc.volume = VOLUME.supplemental
+    } else {
+      doc.role = 'document'
+      doc.rank = doc.kind === 'appendix' ? 3 : 4
+      doc.volume = VOLUME.beyond
+    }
+  }
 }
 
 /** Give unlettered appendices the next free letter, for a scannable rail. */
-function assignLetters(documents) {
-  const used = documents.map((d) => d.letter).filter((l) => l && /^[A-Z]$/.test(l))
+function assignNumerals(documents) {
+  const used = documents
+    .filter((d) => d.role === 'document')
+    .map((d) => d.numeral)
+    .filter((l) => l && /^[A-Z]$/.test(l))
   let next = Math.max(...used.map((l) => l.charCodeAt(0)), 'A'.charCodeAt(0) - 1) + 1
   for (const doc of documents) {
-    if (doc.rank >= 2 && !doc.letter) doc.letter = String.fromCharCode(next++)
+    if (doc.rank === 3 && !doc.numeral) doc.numeral = String.fromCharCode(next++)
   }
 }
 
@@ -270,13 +328,19 @@ const documents = readdirSync(SRC)
   .map((file) => {
     const sections = splitH1(readFileSync(join(SRC, file), 'utf8'))
     if (!sections.length) throw new Error(`no H1 sections in ${file}`)
-    return { file, sections, ...classify(sections) }
+    return { file, sections, order: fileOrder(file), ...classify(sections) }
   })
 
+assignRoles(documents)
 documents.sort(
-  (a, b) => a.rank - b.rank || (a.letter ?? 'ZZ').localeCompare(b.letter ?? 'ZZ') || a.title.localeCompare(b.title),
+  (a, b) =>
+    // an explicit filename number wins; otherwise place by what it contains
+    (a.order ?? Infinity) - (b.order ?? Infinity) ||
+    a.rank - b.rank ||
+    (a.numeral ?? 'ZZ').localeCompare(b.numeral ?? 'ZZ') ||
+    a.title.localeCompare(b.title),
 )
-assignLetters(documents)
+assignNumerals(documents)
 
 const keys = new Set()
 for (const doc of documents) {
@@ -289,73 +353,23 @@ for (const doc of documents) {
 
 const parts = []
 let preamble = ''
+const legends = []
 const seen = new Set()
 
 for (const doc of documents) {
   const { sections, key } = doc
   let part = null
+  // namespaced by document: more than one of them has an "Appendices" part
   const openPart = (meta) => {
-    part = { id: `part-${slug(meta.title)}`, chapters: [], ...meta }
+    part = { id: `part-${key}-${slug(meta.title)}`, chapters: [], ...meta }
     parts.push(part)
     return part
   }
 
-  let start = 0
-  const head = sections[0]
-
-  if (doc.role === 'cookbook') {
-    preamble = tidy(head.body)
-    start = 1
-  } else {
-    // The document's own title becomes the part; its opening section becomes
-    // that part's first chapter, so nothing in the source is dropped.
-    openPart({
-      title: doc.title,
-      numeral: doc.letter,
-      volume: VOLUMES[Math.min(doc.rank, VOLUMES.length - 1)],
-      blurb: firstParagraph(tidy(head.body)),
-    })
-  }
-
-  for (let i = start; i < sections.length; i++) {
-    const section = sections[i]
+  const addChapter = (section, isHead) => {
     const stripped = takeTags(section.heading)
-
-    if (doc.role === 'cookbook') {
-      const pm = stripped.title.match(/^Part\s+([IVXLC]+)\s*[-–—]\s*(.*)$/)
-      if (pm) {
-        openPart({
-          title: pm[2],
-          numeral: pm[1],
-          volume: VOLUMES[1],
-          blurb: firstParagraph(tidy(section.body)),
-        })
-        continue
-      }
-      if (/^Appendix\s+[A-Z]\b/.test(stripped.title) && part?.title !== 'Appendices') {
-        openPart({
-          title: 'Appendices',
-          numeral: 'A',
-          volume: VOLUMES[1],
-          blurb: 'The models worth carrying out of the cookbook, and where they sit on the exam.',
-        })
-      }
-    }
-
-    // only reached if a document has content before its first `# Part`
-    if (!part) {
-      openPart({
-        title: doc.title,
-        numeral: doc.letter,
-        volume: VOLUMES[Math.min(doc.rank, VOLUMES.length - 1)],
-        blurb: '',
-      })
-    }
-
-    // The opening section is the document's introduction; the part heading
-    // already carries its real name, so do not repeat it.
-    const isHead = i === 0
     let { number, title } = takeNumber(stripped.title)
+
     // The id stays keyed to the document's real name — it is the URL, and it
     // is in people's cookies — even though the heading reads "Introduction".
     let idBasis = title
@@ -369,14 +383,13 @@ for (const doc of documents) {
     const { minutes, runnable } = measure(body)
 
     let id = `${key}-${slug(idBasis)}`
-    if (seen.has(id) && number) id = `${key}-${slug(`${number} ${idBasis}`)}`
-    while (seen.has(id)) id = `${id}-x`
+    if (seen.has(id)) id = `${key}-${slug(`${number ?? part.chapters.length} ${idBasis}`)}`
     seen.add(id)
 
     writeFileSync(join(OUT_CHAPTERS, `${id}.md`), `${body}\n`)
 
     // The part heading already shows this document's opening line; no need
-    // for its Introduction chapter to repeat it verbatim underneath.
+    // for its Introduction chapter to repeat it underneath.
     const blurb = firstParagraph(body)
 
     part.chapters.push({
@@ -391,9 +404,77 @@ for (const doc of documents) {
       sections: subheadings(body),
     })
   }
+
+  const structured = doc.role === 'cookbook' || doc.role === 'series'
+  const head = sections[0]
+
+  // A document that supplies its own parts also supplies a preamble before the
+  // first of them. The cookbook's becomes the landing page; a companion's
+  // becomes the opening chapter of its first part, once that part exists.
+  let pendingHead = null
+  if (structured) {
+    if (doc.role === 'cookbook') preamble = tidy(head.body)
+    else pendingHead = head
+  } else {
+    openPart({
+      title: doc.title,
+      numeral: doc.numeral,
+      volume: doc.volume,
+      blurb: firstParagraph(tidy(head.body)),
+    })
+  }
+
+  legends.push(...readLegend(tidy(head.body)))
+
+  for (const section of sections.slice(structured ? 1 : 0)) {
+    const title = takeTags(section.heading).title
+
+    if (structured) {
+      const pm = title.match(/^Part\s+([IVXLC]+)\s*[-–—]\s*(.*)$/)
+      if (pm) {
+        openPart({
+          title: pm[2],
+          numeral: pm[1],
+          volume: doc.volume,
+          blurb: firstParagraph(tidy(section.body)),
+        })
+        if (pendingHead) {
+          addChapter(pendingHead, true)
+          pendingHead = null
+        }
+        continue
+      }
+      if (/^Appendix\s+[A-Z]\b/.test(title) && part?.title !== 'Appendices') {
+        openPart({
+          title: 'Appendices',
+          numeral: 'A',
+          volume: doc.volume,
+          blurb: 'Reference material to come back to once the labs are behind you.',
+        })
+      }
+    }
+
+    // a document with no `# Part` heading at all still needs somewhere to go
+    if (!part) {
+      openPart({ title: doc.title, numeral: doc.numeral, volume: doc.volume, blurb: '' })
+    }
+
+    addChapter(section, section === head)
+  }
 }
 
 const intro = readPreamble(preamble)
+
+const tagUse = new Map()
+for (const part of parts) {
+  for (const chapter of part.chapters) {
+    for (const tag of chapter.tags) tagUse.set(tag, (tagUse.get(tag) ?? 0) + 1)
+  }
+}
+const legend = [...new Map(legends.map((l) => [l.tag, l])).values()]
+  .filter((l) => tagUse.has(l.tag))
+  .sort((a, b) => tagUse.get(b.tag) - tagUse.get(a.tag))
+const tagNames = [...tagUse.keys()].sort()
 
 const esc = (s) => JSON.stringify(s)
 
@@ -432,7 +513,7 @@ writeFileSync(
  * Source of truth is the markdown in content/. Run \`npm run content\`.
  */
 
-export type Tag = 'CKAD' | 'DEV' | 'DEEP DIVE'
+export type Tag = ${tagNames.map(esc).join(' | ')}
 export type ChapterKind = 'brief' | 'lab'
 
 export type Section = { id: string; title: string }
@@ -512,13 +593,158 @@ export const intro = {
   /** short form for the hero flag, e.g. "Kubernetes 1.35" */
   version: ${esc(intro.target?.match(/Kubernetes\s+[\d.]+/)?.[0] ?? 'Kubernetes')},
   legend: [
-${intro.legend.map((l) => `    { tag: ${esc(l.tag)}, meaning: ${esc(l.meaning)} },`).join('\n')}
+${legend.map((l) => `    { tag: ${esc(l.tag)}, meaning: ${esc(l.meaning)} },`).join('\n')}
   ] as { tag: Tag; meaning: string }[],
   /** the recurring teaching loop, drawn by the author */
   diagram: ${intro.diagram ? esc(intro.diagram) : 'null'},
 }
 `,
 )
+
+/**
+ * What the source could do better.
+ *
+ * None of this stops a build — the pipeline is deliberately forgiving, because
+ * the markdown is written by someone who is not thinking about our renderer.
+ * But every item here is somewhere we are guessing, and a guess is somewhere
+ * the page can be wrong. Run `npm run review` to get the detail.
+ */
+function review(documents, parts) {
+  const detail = process.argv.includes('--report')
+  const chapters = parts.flatMap((p) => p.chapters)
+  const notes = []
+
+  const bodies = documents.map((d) => ({
+    doc: d,
+    text: d.sections.map((s) => s.body).join('\n'),
+  }))
+
+  // 1. fences we have to guess about
+  const fences = new Map()
+  let ambiguousText = 0
+  let looksYaml = 0
+  let looksShell = 0
+  for (const { text } of bodies) {
+    for (const [, lang] of text.matchAll(/^```(\w*)$/gm)) {
+      if (lang) fences.set(lang, (fences.get(lang) ?? 0) + 1)
+    }
+    for (const [, block] of text.matchAll(/^```text\n([\s\S]*?)^```/gm)) {
+      ambiguousText++
+      const t = block.trim()
+      if (/^(apiVersion:|kind:\s*\w)/.test(t) || /^\s*(apiVersion|metadata|spec):\s*$/m.test(t)) looksYaml++
+      else if (/^(kubectl|helm|docker|kind|cilium|argocd|curl|sudo|git|go |export )\s/.test(t)) looksShell++
+    }
+  }
+
+  if (ambiguousText) {
+    notes.push({
+      title: `${ambiguousText} \`\`\`text blocks are classified by guesswork`,
+      body: [
+        'We decide diagram-vs-output by looking for |, v, +-- and -> characters.',
+        'A dedicated fence for drawings would make it exact.',
+        looksYaml ? `${looksYaml} of them look like YAML and render unhighlighted.` : null,
+        looksShell ? `${looksShell} of them look like commands and render without a prompt or copy button.` : null,
+      ].filter(Boolean),
+    })
+  }
+
+  const shells = [...fences].filter(([l]) => ['bash', 'sh', 'shell', 'zsh', 'console'].includes(l))
+  if (shells.length > 1) {
+    notes.push({
+      title: 'shell fences use more than one language tag',
+      body: [shells.map(([l, n]) => `${l}: ${n}`).join(', ') + ' — picking one keeps them identical.'],
+    })
+  }
+
+  // 2. per-chapter metadata we derive and often cannot
+  const byDoc = new Map(documents.map((d) => [d.key, { notoc: 0, notags: 0, n: 0 }]))
+  for (const c of chapters) {
+    const stat = byDoc.get(c.id.split('-')[0])
+    if (!stat) continue
+    stat.n++
+    if (!c.sections.length) stat.notoc++
+    if (!c.tags.length) stat.notags++
+  }
+  const noToc = chapters.filter((c) => !c.sections.length).length
+  const noTags = chapters.filter((c) => !c.tags.length).length
+
+  if (noTags) {
+    const worst = [...byDoc].filter(([, s]) => s.notags === s.n && s.n > 1)
+    notes.push({
+      title: `${noTags} of ${chapters.length} chapters carry no [TAG] marker`,
+      body: [
+        'Tags drive the flags on chapter headers and the syllabus.',
+        worst.length
+          ? `Entirely untagged: ${worst.map(([k, s]) => `${k} (${s.n} chapters)`).join(', ')}.`
+          : null,
+      ].filter(Boolean),
+    })
+  }
+
+  if (noToc) {
+    notes.push({
+      title: `${noToc} of ${chapters.length} chapters have no \`##\` subheadings`,
+      body: [
+        'Those chapters get no on-this-page contents. A couple of ## headings in',
+        'the longer ones would give readers somewhere to aim.',
+      ],
+    })
+  }
+
+  // 3. things that collide
+  const titles = new Map()
+  for (const c of chapters) titles.set(c.title, (titles.get(c.title) ?? 0) + 1)
+  const dupes = [...titles].filter(([t, n]) => n > 1 && t !== 'Introduction')
+  if (dupes.length) {
+    notes.push({
+      title: `${dupes.length} chapter titles appear in more than one document`,
+      body: [dupes.map(([t, n]) => `"${t}" ×${n}`).join(', ') + ' — identical rows in the syllabus.'],
+    })
+  }
+
+  const numbered = documents.filter((d) => d.order !== null)
+  if (numbered.length && numbered.length !== documents.length) {
+    notes.push({
+      title: 'some documents have a number in the filename and some do not',
+      body: [
+        `numbered: ${numbered.map((d) => d.file).join(', ')}`,
+        'Numbered files run first, in order; the rest are placed by what they contain.',
+        'Number all of them or none of them to keep the running order obvious.',
+      ],
+    })
+  }
+
+  const unlettered = documents.filter((d) => d.kind === 'appendix' && !d.numeral)
+  if (unlettered.length) {
+    notes.push({
+      title: 'an appendix has no letter',
+      body: unlettered.map((d) => `${d.file} — we assign one, which moves if a real letter appears later.`),
+    })
+  }
+
+  const long = chapters.filter((c) => c.minutes >= 35)
+  if (long.length) {
+    notes.push({
+      title: `${long.length} chapter(s) run past 35 minutes`,
+      body: long.map((c) => `${c.minutes} min — ${c.title}`),
+    })
+  }
+
+  if (!notes.length) return
+  if (!detail) {
+    console.log(`\n${notes.length} content notes — run \`npm run review\` for detail.`)
+    return
+  }
+
+  console.log('\n' + '─'.repeat(72))
+  console.log('CONTENT REVIEW — suggestions for the source, nothing here is fatal')
+  console.log('─'.repeat(72))
+  for (const [i, note] of notes.entries()) {
+    console.log(`\n${i + 1}. ${note.title}`)
+    for (const line of note.body) console.log(`   ${line}`)
+  }
+  console.log()
+}
 
 const chapters = readdirSync(OUT_CHAPTERS).length
 const minutes = parts.flatMap((p) => p.chapters).reduce((sum, c) => sum + c.minutes, 0)
@@ -527,5 +753,7 @@ console.log(
     `${Math.floor(minutes / 60)}h ${minutes % 60}m`,
 )
 for (const doc of documents) {
-  console.log(`  ${(doc.letter ?? '-').padStart(2)}  ${doc.key.padEnd(5)} ${doc.file}`)
+  console.log(`  ${(doc.numeral ?? '-').padStart(2)}  ${doc.key.padEnd(5)} ${doc.file}`)
 }
+
+review(documents, parts)

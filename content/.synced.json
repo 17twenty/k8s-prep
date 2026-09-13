@@ -1,0 +1,12 @@
+{
+  "gist": "197ed2df9dd7ed63b897464674519b1a",
+  "syncedAt": "2026-09-13T07:03:20.722Z",
+  "files": [
+    "cillium-gateay-appendix.md",
+    "gitops-appendix.md",
+    "k8s-cheatsheet.md",
+    "kind-quickstart.md",
+    "kubeadm-appendix.md",
+    "multi-tenancy.md"
+  ]
+}

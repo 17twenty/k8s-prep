@@ -2,18 +2,13 @@ import { cn } from 'cn'
 import { ArrowLeft, ArrowRight, Check } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, Navigate, useParams } from 'react-router'
-import { AppShell, Flag } from '@/components/app-shell'
+import { AppShell, TagFlag } from '@/components/app-shell'
 import { Markdown } from '@/components/markdown'
-import { formatDuration, getChapter, neighbours, type Tag } from '@/data/course'
+import { formatDuration, getChapter, neighbours } from '@/data/course'
 import { useProgress } from '@/lib/use-progress'
 
 const bodies = import.meta.glob('../content/chapters/*.md', { query: '?raw', import: 'default' })
 
-const tagTone: Record<Tag, 'kilo' | 'signal' | 'quiet'> = {
-  CKAD: 'kilo',
-  DEV: 'quiet',
-  'DEEP DIVE': 'signal',
-}
 
 function useChapterBody(id: string) {
   const [body, setBody] = useState<string | null>(null)
@@ -138,9 +133,7 @@ export function ChapterPage() {
                 </span>
               )}
               {chapter.tags.map((tag) => (
-                <Flag key={tag} tone={tagTone[tag]}>
-                  {tag}
-                </Flag>
+                <TagFlag key={tag} tag={tag} />
               ))}
             </div>
 

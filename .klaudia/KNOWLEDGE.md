@@ -253,3 +253,107 @@ exactly the symptom the user reported.
 
 Verified copied text excludes the decorative `$` prompt spans, preserves `\`
 continuations, and a folded 203-line block still copies all 203 lines.
+- 2026-09-13T16:55:04+10:00 ## k8s-prep — GitOps handbook (Sept 2026): "has Parts" no longer means "is the cookbook"
+
+`gitops-appendix.md` (102KB, 59 H1s, 53 chapters) arrived with its own
+`# Part I..V` headings AND its own `# Appendix A..D`. That broke two assumptions:
+
+1. **`classify()` treated any part-bearing doc as the primary cookbook.** With two
+   such docs, sort order (G < K) meant GitOps would have overwritten the landing
+   page preamble and merged into "The cookbook" volume. Fixed by splitting
+   structure from role: `classify()` returns facts (`hasParts`, `ckad` count);
+   `assignRoles()` then picks primary = **part-bearing doc with the most `[CKAD]`
+   sections** (this is a CKAD course, so that IS the definition). Others with
+   parts become `role:'series'` — rank 2, volume = their own title, own parts kept.
+   A series' preamble is folded in as the first chapter of its Part I
+   (`pendingHead` + `sections.splice`), titled "Introduction".
+2. **Tags were a hardcoded `(CKAD|DEV|DEEP DIVE)` regex.** New `[OPS]`/`[PLATFORM]`
+   would have rendered literally in titles. `takeTags` now strips *trailing*
+   `[A-Z ]` tokens in a loop — robust to new markers, and won't touch a bracketed
+   phrase mid-title. `Tag` is emitted as a union of observed tags; the legend is
+   the **union of all documents' legends** (each doc defines its own "Sections are
+   marked:" list), ordered by usage.
+
+Also fixed:
+- **Part ids collided**: both cookbook and GitOps have an "Appendices" part →
+  duplicate React key. Part ids are now namespaced `part-${docKey}-${slug}`.
+- `tagTone` as `Record<Tag,...>` broke the build on every new tag. Replaced with
+  `<TagFlag tag>` in app-shell.tsx: `TONES[tag] ?? 'quiet'`. Only CKAD (kilo) and
+  DEEP DIVE (signal) get accents — a chapter marked [DEV][OPS][PLATFORM] should
+  not look like a paint chart.
+- `diff` fence routed to `ManifestBlock numbered={false}` with line-level colour
+  (added=green/str, removed=rust/var, hunk=cmt). Context lines starting with a
+  space are correctly not coloured (regex anchored `^-`/`^+`).
+
+Totals: 209 chapters, 23 parts, 915 command blocks, 20h 28m. **0 ids broken**, 54 added.
+
+PROCESS LESSON: a python `s.replace()` edit silently no-opped (prettier had
+reformatted the file), so the diff routing appeared done but wasn't — it only
+surfaced when the render looked wrong. Always grep-verify after scripted edits,
+or use the Edit tool which errors on no-match.
+- 2026-09-13T17:00:16+10:00 ## k8s-prep — build script refactor + `npm run review` (content lint)
+
+Refactored `build-content.mjs` (734 lines) after it had grown by patching.
+**Verified behaviour-neutral**: `course.ts` byte-identical, chapter list identical,
+chapter content hash `6a41ec970f6f33b6` unchanged. Always do that when refactoring
+this script — snapshot `src/data/course.ts` + `shasum src/content/chapters/*.md`
+before and diff after.
+
+Changes:
+- Chapter creation extracted to `addChapter(section, isHead)`. This removed the
+  `sections.splice(i+1, 0, pendingHead)` array-mutation-while-iterating hack used
+  to fold a companion's preamble into its Part I, and removed the two competing
+  ways of deciding `isHead`.
+- `VOLUMES[0|1|2]` magic indexes → named `VOLUME.{supplemental,cookbook,beyond}`.
+- `letter` → `numeral` throughout (it is the rail ordinal: `0`, `I`, `C`), and
+  `assignLetters` → `assignNumerals`.
+- Id disambiguation was `while (seen.has(id)) id += '-x'` (unstable); now falls
+  back to `number ?? position` prefix once, deterministically.
+
+### `npm run review` (= `build-content.mjs --report`)
+New `review(documents, parts)` surfaces where the pipeline **guesses**. Prints a
+one-line count on every build; full detail with the flag. Nothing is fatal —
+the markdown is written by someone not thinking about our renderer and should
+stay that way. Current findings (Sept 2026, 209 chapters):
+1. 630 ```text blocks classified diagram-vs-output by heuristic; 1 looks like
+   YAML, 17 like commands (render without prompt/copy).
+2. shell fences split bash:911 / sh:3.
+3. 121/209 chapters carry no `[TAG]`; kubeadm and cilium are 100% untagged.
+4. 136/209 chapters have no `##` → no on-this-page TOC (this is *why* the TOC is
+   floated into the margin rather than given a grid column).
+5. 4 chapter titles collide across documents (Lab Setup, Official References,
+   The Model to Remember, Reference Versions).
+6. 2 chapters over 35 min (46 min Failed Rollouts; 35 min CKAD Command Patterns).
+
+Content parses cleanly otherwise: no unbalanced fences, no CRLF, no 4-backtick
+fences, no H1s inside fences.
+- 2026-09-13T17:07:01+10:00 ## k8s-prep — AUTHORING.md + gist/folder workflows coexist
+
+Added `AUTHORING.md` (root, linked from README) for content authors: the two
+routes in, running order, heading/tag/fence conventions, what gets derived, URL
+stability, `npm run review`, and a minimal worked example. **The example in that
+file was extracted and built end-to-end to verify every claim** — do that again
+if you edit it.
+
+### sync no longer eats local files
+`sync-content.mjs` writes `content/.synced.json`
+(`{gist, syncedAt, files[]}`) and will only delete files listed there. Anything
+else in `content/` is reported as `· name.md (local, left alone)` and never
+touched. Before this, a locally authored doc was deleted on the next sync.
+
+### numeric filename prefixes = explicit running order
+`01-intro.md`, `02-pods.md`. `fileOrder()` parses `^(\d+)[-_. ]`; sort is
+`(a.order ?? Infinity) - (b.order ?? Infinity) || rank || numeral || title`, so
+numbered files run first in numeric order and unnumbered fall back to content
+classification. `deriveKey()` now skips pure-numeric tokens so the prefix never
+reaches an id (`01-intro.md` → key `i`, not `0i`). `review()` warns on a
+half-numbered folder since that ordering is ambiguous.
+
+Verified: gist-only content still produces byte-identical `course.ts` and chapter
+hash `6a41ec970f6f33b6`.
+
+### PROCESS — this bit me twice now
+A python `s.replace()` that doesn't match fails **silently**, and an Edit that
+strips a trailing newline can join two statements (`const x = ...  if (...) {`)
+and break the file. After any scripted edit to `scripts/*.mjs`, run
+`node --check` on it; after any edit to README/docs, grep for the new text.

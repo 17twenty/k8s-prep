@@ -13,11 +13,12 @@
  *
  * GIST_ID overrides the source. GITHUB_TOKEN lifts the anonymous rate limit.
  */
-import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const GIST_ID = process.env.GIST_ID ?? '197ed2df9dd7ed63b897464674519b1a'
+const MANIFEST = '.synced.json'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const dir = join(root, 'content')
 const dry = process.argv.includes('--dry')
@@ -38,8 +39,23 @@ const files = Object.values(gist.files).filter((f) => f.filename.endsWith('.md')
 if (!files.length) throw new Error('gist contains no markdown files')
 
 mkdirSync(dir, { recursive: true })
-const existing = new Set(readdirSync(dir).filter((f) => f.endsWith('.md')))
+
+/**
+ * Which files this script is responsible for.
+ *
+ * Only files it fetched previously may be deleted. Anything else in content/ is
+ * someone's own writing — the two authoring routes are meant to coexist, and a
+ * sync must never eat a locally authored document.
+ */
+const manifestPath = join(dir, MANIFEST)
+const owned = new Set(
+  existsSync(manifestPath) ? JSON.parse(readFileSync(manifestPath, 'utf8')).files ?? [] : [],
+)
+const onDisk = new Set(readdirSync(dir).filter((f) => f.endsWith('.md')))
+const local = [...onDisk].filter((f) => !owned.has(f) && !files.some((g) => g.filename === f))
+
 let changed = 0
+const fetched = []
 
 for (const file of files) {
   // `content` is truncated for large files, so always read the raw URL
@@ -49,8 +65,8 @@ for (const file of files) {
   })
 
   const path = join(dir, file.filename)
-  const before = existing.has(file.filename) ? readFileSync(path, 'utf8') : null
-  existing.delete(file.filename)
+  const before = onDisk.has(file.filename) ? readFileSync(path, 'utf8') : null
+  fetched.push(file.filename)
 
   if (before === body) {
     console.log(`  = ${file.filename}`)
@@ -61,10 +77,22 @@ for (const file of files) {
   if (!dry) writeFileSync(path, body)
 }
 
-for (const orphan of existing) {
+for (const orphan of owned) {
+  if (fetched.includes(orphan) || !onDisk.has(orphan)) continue
   changed++
   console.log(`  - ${orphan}  (no longer in the gist)`)
   if (!dry) rmSync(join(dir, orphan))
+}
+
+for (const file of local) {
+  console.log(`  · ${file}  (local, left alone)`)
+}
+
+if (!dry) {
+  writeFileSync(
+    manifestPath,
+    `${JSON.stringify({ gist: GIST_ID, syncedAt: new Date().toISOString(), files: fetched.sort() }, null, 2)}\n`,
+  )
 }
 
 console.log(

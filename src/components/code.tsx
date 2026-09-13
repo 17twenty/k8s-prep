@@ -139,7 +139,15 @@ function Fold({ lines, children }: { lines: number; children: ReactNode }) {
 }
 
 /** A manifest or a listing. Line numbers because you will be told to edit one. */
-export function ManifestBlock({ code, lang }: { code: string; lang: string }) {
+export function ManifestBlock({
+  code,
+  lang,
+  numbered = true,
+}: {
+  code: string;
+  lang: string;
+  numbered?: boolean;
+}) {
   const lines = highlight(code, lang);
   const gutter = String(lines.length).length;
 
@@ -157,13 +165,15 @@ export function ManifestBlock({ code, lang }: { code: string; lang: string }) {
           <code>
             {lines.map((tokens, i) => (
               <span key={i} className="block">
-                <span
-                  aria-hidden="true"
-                  className="mr-4 inline-block shrink-0 text-right text-ink-3/60 select-none tabular-nums"
-                  style={{ width: `${gutter}ch` }}
-                >
-                  {i + 1}
-                </span>
+                {numbered && (
+                  <span
+                    aria-hidden="true"
+                    className="mr-4 inline-block shrink-0 text-right text-ink-3/60 select-none tabular-nums"
+                    style={{ width: `${gutter}ch` }}
+                  >
+                    {i + 1}
+                  </span>
+                )}
                 {tokens.map((token, j) => (
                   <span key={j} className={tokenClass[token.kind]}>
                     {token.text}
@@ -215,6 +225,9 @@ const LISTINGS = new Set([
 ]);
 
 export function CodeBlock({ code, lang }: { code: string; lang: string }) {
+  // line numbers would fight a diff's own +/- line markers
+  if (lang === "diff" || lang === "patch")
+    return <ManifestBlock code={code} lang={lang} numbered={false} />;
   if (LISTINGS.has(lang)) return <ManifestBlock code={code} lang={lang} />;
   if (isShell(lang)) return <ShellBlock code={code} />;
   if (looksLikeDiagram(code)) return <FigureBlock code={code} />;

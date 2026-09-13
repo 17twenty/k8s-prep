@@ -94,6 +94,15 @@ export function highlight(code: string, lang: string): Token[][] {
   const lines = code.replace(/\n$/, '').split('\n')
   if (lang === 'yaml') return lines.map((l) => scan(l, YAML))
   if (lang === 'go') return lines.map((l) => scan(l, GO))
+  // A diff is coloured by line, not by token: added is land, removed is hazard.
+  if (lang === 'diff' || lang === 'patch') {
+    return lines.map((line) => {
+      if (/^\+/.test(line)) return [{ text: line, kind: 'str' as const }]
+      if (/^-/.test(line)) return [{ text: line, kind: 'var' as const }]
+      if (/^(@@|diff |index |---|\+\+\+)/.test(line)) return [{ text: line, kind: 'cmt' as const }]
+      return [{ text: line, kind: 'plain' as const }]
+    })
+  }
   if (SHELLS.has(lang) || lang === 'dockerfile') {
     let inHeredoc: string | null = null
     return lines.map((line) => {

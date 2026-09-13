@@ -5,6 +5,7 @@ import { Link } from 'react-router'
 import { NavRail } from '@/components/nav-rail'
 import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
+import type { Tag } from '@/data/course'
 
 const topNav = [
   { label: 'Method', to: '/#method' },
@@ -127,3 +128,19 @@ export function Flag({ children, tone = 'kilo' }: { children: ReactNode; tone?: 
     </span>
   )
 }
+
+/**
+ * One accent for the exam, one for the deep end, neutral for the rest — a
+ * chapter marked [DEV] [OPS] [PLATFORM] should not look like a paint chart.
+ * Unknown markers fall back rather than failing to compile, so a document that
+ * invents one still renders.
+ */
+const TONES: Record<string, 'kilo' | 'signal' | 'quiet'> = {
+  CKAD: 'kilo',
+  'DEEP DIVE': 'signal',
+}
+
+export function TagFlag({ tag }: { tag: Tag }) {
+  return <Flag tone={TONES[tag] ?? 'quiet'}>{tag}</Flag>
+}
+
