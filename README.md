@@ -6,6 +6,7 @@ shadcn/ui. Progress lives in a cookie, so there is no account and no backend.
 ```bash
 npm install
 npm run dev       # http://localhost:5173
+npm run sync      # pull the latest markdown from the gist
 npm run content   # regenerate chapters from content/
 npm run build     # runs `content` first
 ```
@@ -15,14 +16,23 @@ npm run build     # runs `content` first
 **`content/*.md` is the source of truth.** It is the author's markdown, fetched
 verbatim from the gist. Nothing in `src/` should be hand-edited to change prose.
 
+Two scripts, one job each. Only the first touches the network, which is why
+`npm run build` does not depend on GitHub being reachable.
+
 ```
-content/*.md
-     |
-     |  scripts/build-content.mjs
-     v
+gist  --[ sync-content.mjs ]-->  content/  --[ build-content.mjs ]-->  src/
+```
+
+| Script | Does | Does not |
+| --- | --- | --- |
+| `sync-content.mjs` | mirror the gist into `content/` | parse anything |
+| `build-content.mjs` | derive chapters and metadata | touch the network |
+
+Generated output, none of it hand-maintained:
+
+```
 src/content/chapters/<id>.md   one file per H1 section, lazy-loaded per route
-src/content/preamble.md        the cookbook's own introduction
-src/data/course.ts             GENERATED metadata — do not edit
+src/data/course.ts             metadata, totals, and the cookbook's preamble
 ```
 
 `npm run content` splits each document on `#` headings, groups them into parts,
@@ -30,12 +40,13 @@ and derives everything the UI needs:
 
 | Derived | How |
 | --- | --- |
-| Part grouping | `# Part VII - ...` headings open a new part; the appendices get their own |
+| Document order & part grouping | see the classification table above — nothing keyed on filenames |
 | Chapter number | the author's own `9a`, `C.14`, `D.3` — kept rather than renumbered |
 | Tags | `[CKAD]`, `[DEV]`, `[DEEP DIVE]` lifted out of the heading |
 | Blurb | first real paragraph, skipping ones that just run into a command block |
 | Duration | words ÷ 180 plus a minute per runnable command block |
 | On-this-page | the `##` headings inside the section |
+| Landing page copy | the cookbook's preamble — its statement of intent, target version, `[CKAD]` legend and teaching-loop diagram are all extracted, so the hero quotes the author instead of a stale copy of him |
 
 To add or edit material: change the markdown in `content/`, run `npm run content`,
 done. Sidebar, syllabus, totals, prev/next and progress all follow.
@@ -43,15 +54,40 @@ done. Sidebar, syllabus, totals, prev/next and progress all follow.
 ### Re-syncing from the gist
 
 ```bash
-GIST=https://gist.githubusercontent.com/17twenty/197ed2df9dd7ed63b897464674519b1a/raw
-for f in kind-quickstart.md k8s-cheatsheet.md kubeadm-appendix.md cillium-gateay-appendix.md; do
-  curl -sSL "$GIST/$f" -o "content/$f"
-done
-npm run content
+npm run sync            # mirror content/ against the gist
+npm run sync -- --dry   # show what would change first
+npm run content         # then rebuild
 ```
 
-Reading order is set by `SOURCES` in `scripts/build-content.mjs`: kind quickstart,
-then the cookbook, then Appendix C (kubeadm), then Appendix D (Cilium).
+`scripts/sync-content.mjs` asks the gist API for its file list, so **no filename
+is hardcoded anywhere**. Add a document to the gist and it arrives; remove one
+and it goes. Override the gist with `GIST_ID=...`, and set `GITHUB_TOKEN` if you
+hit the anonymous rate limit.
+
+### How a new document places itself
+
+Documents are classified by what they contain, not what they are called:
+
+| Signal in the document | Result |
+| --- | --- |
+| contains `# Part VII - ...` headings | the core cookbook — runs second, keeps its own parts |
+| opens `# Supplemental - ...` | front matter, runs first |
+| opens `# Appendix C - ...` | runs after the cookbook, in letter order |
+| opens `# Appendix - ...` with no letter | gets the next free letter automatically |
+| anything else | runs last, alphabetically |
+
+The document's title becomes the part; its opening section becomes that part's
+first chapter, titled *Introduction*, so nothing in the source is dropped.
+Appendices group under one **Beyond the exam** volume in the rail.
+
+`PINNED_KEYS` in `scripts/build-content.mjs` is the one place a filename appears.
+It fixes the id prefixes (`ck-`, `c-`, `d-`) so URLs already shared and progress
+already saved keep working. **A new document does not need an entry** — it gets
+initials derived from its filename (`multi-tenancy.md` → `mt-`).
+
+Chapter ids are slugs of chapter titles, so renaming a chapter upstream does
+change its URL. Completions for ids that no longer exist are pruned from the
+cookie on load rather than accumulating forever.
 
 ## Code blocks
 

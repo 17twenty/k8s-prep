@@ -149,3 +149,21 @@ request / limit -> what this workload asks for
 LimitRange      -> policy/defaults around individual workloads
 ResourceQuota   -> aggregate namespace budget
 ```
+
+## Scheduling controls placement, not API permission
+
+Later we will meet node selectors, affinity, taints and tolerations in broader platform contexts.
+
+Keep one distinction in mind now:
+
+```text
+scheduler controls
+    -> where a Pod is eligible to run
+
+RBAC
+    -> what API operations an identity may perform
+```
+
+A `NoSchedule` taint on a control-plane node can keep ordinary workloads away from that node. It does **not** decide who may edit Node objects through the API, and it does not control who may SSH into the machine.
+
+We will bring those boundaries together in Chapter 23.

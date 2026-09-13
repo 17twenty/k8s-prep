@@ -102,6 +102,32 @@ Configuration:
 Pod spec -> referenced object -> key -> mount/env -> application
 ```
 
+## Security boundaries answer different questions
+
+```text
+authentication
+    -> who are you?
+
+authorization / RBAC
+    -> may you make this API request?
+
+admission
+    -> is this write acceptable?
+
+scheduling controls
+    -> where may this workload run?
+
+NetworkPolicy
+    -> which network flows are allowed?
+
+infrastructure IAM / SSH
+    -> who may administer the actual machines?
+```
+
+Namespaces help provide scope, but are not an automatic security boundary by themselves.
+
+For stronger tenancy, separate tenant Kubernetes APIs/control planes can add another boundary; see `multitenancy-appendix.md`.
+
 ## Kubernetes extension uses the same model
 
 ```text

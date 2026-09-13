@@ -19,7 +19,6 @@ export type Chapter = {
   kind: ChapterKind
   /** how many runnable command blocks the chapter contains */
   commands: number
-  hasYaml: boolean
   sections: Section[]
 }
 
@@ -34,22 +33,21 @@ export type Part = {
 
 export const parts: Part[] = [
   {
-    id: "part-getting-a-cluster",
-    title: "Getting a cluster",
+    id: "part-run-kubernetes-locally-with-kind",
+    title: "Run Kubernetes Locally with kind",
     volume: "Supplemental",
     numeral: "0",
-    blurb: "A disposable Kubernetes lab on your own machine, so every later chapter has somewhere to run.",
+    blurb: "The rest of our cookbook assumes you already have access to a Kubernetes cluster.",
     chapters: [
       {
         id: "kind-run-kubernetes-locally-with-kind",
         number: null,
-        title: "Run Kubernetes locally with kind",
-        blurb: "The rest of our cookbook assumes you already have access to a Kubernetes cluster.",
+        title: "Introduction",
+        blurb: "",
         tags: ["DEV"],
         minutes: 8,
         kind: "lab",
         commands: 7,
-        hasYaml: false,
         sections: [{ id: "prerequisites", title: "Prerequisites" }, { id: "install-kind", title: "Install kind" }],
       },
       {
@@ -61,7 +59,6 @@ export const parts: Part[] = [
         minutes: 8,
         kind: "lab",
         commands: 7,
-        hasYaml: false,
         sections: [{ id: "observe-the-cluster", title: "Observe the Cluster" }],
       },
       {
@@ -73,7 +70,6 @@ export const parts: Part[] = [
         minutes: 2,
         kind: "lab",
         commands: 1,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -85,7 +81,6 @@ export const parts: Part[] = [
         minutes: 3,
         kind: "lab",
         commands: 3,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -97,7 +92,6 @@ export const parts: Part[] = [
         minutes: 4,
         kind: "lab",
         commands: 3,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -109,7 +103,6 @@ export const parts: Part[] = [
         minutes: 4,
         kind: "lab",
         commands: 3,
-        hasYaml: false,
         sections: [],
       },
     ],
@@ -130,7 +123,6 @@ export const parts: Part[] = [
         minutes: 7,
         kind: "lab",
         commands: 6,
-        hasYaml: false,
         sections: [{ id: "a-note-about-the-lab", title: "A note about the lab" }],
       },
       {
@@ -142,7 +134,6 @@ export const parts: Part[] = [
         minutes: 21,
         kind: "lab",
         commands: 16,
-        hasYaml: true,
         sections: [{ id: "start-with-one-application", title: "Start with one application" }, { id: "spec-is-what-you-asked-for", title: "spec is what you asked for" }, { id: "change-what-you-want", title: "Change what you want" }, { id: "change-reality-instead", title: "Change reality instead" }, { id: "there-is-more-than-one-controller-involved", title: "There is more than one controller involved" }, { id: "how-do-we-know-the-controller-saw-our-change", title: "How do we know the controller saw our change?" }, { id: "useful-detour-talk-to-the-application", title: "Useful detour: talk to the application" }, { id: "what-to-keep-from-this-chapter", title: "What to keep from this chapter" }],
       },
       {
@@ -154,7 +145,6 @@ export const parts: Part[] = [
         minutes: 19,
         kind: "lab",
         commands: 15,
-        hasYaml: true,
         sections: [{ id: "the-common-shape-of-a-kubernetes-object", title: "The common shape of a Kubernetes object" }, { id: "ask-kubernetes-for-the-object-we-already-created", title: "Ask Kubernetes for the object we already created" }, { id: "generate-yaml-instead-of-writing-it-from-memory", title: "Generate YAML instead of writing it from memory" }, { id: "several-commands-one-underlying-idea", title: "Several commands, one underlying idea" }, { id: "imperative-and-declarative-are-not-opposing-religions", title: "Imperative and declarative are not opposing religions" }],
       },
       {
@@ -166,7 +156,6 @@ export const parts: Part[] = [
         minutes: 18,
         kind: "lab",
         commands: 16,
-        hasYaml: false,
         sections: [{ id: "discover-resource-types", title: "Discover resource types" }, { id: "ask-for-the-schema", title: "Ask for the schema" }, { id: "query-individual-fields", title: "Query individual fields" }, { id: "learn-to-switch-output-formats", title: "Learn to switch output formats" }],
       },
     ],
@@ -187,7 +176,6 @@ export const parts: Part[] = [
         minutes: 21,
         kind: "lab",
         commands: 17,
-        hasYaml: true,
         sections: [{ id: "the-container-image-is-an-input-to-kubernetes", title: "The container image is an input to Kubernetes" }, { id: "create-a-standalone-pod", title: "Create a standalone Pod" }, { id: "describe-connects-configuration-to-runtime-events", title: "describe connects configuration to runtime events" }, { id: "logs-are-container-output", title: "Logs are container output" }, { id: "exec-runs-a-process-inside-the-existing-container", title: "exec runs a process inside the existing container" }, { id: "container-command-and-args", title: "Container command and args" }, { id: "what-happens-without-a-controller", title: "What happens without a controller?" }],
       },
       {
@@ -199,7 +187,6 @@ export const parts: Part[] = [
         minutes: 12,
         kind: "lab",
         commands: 10,
-        hasYaml: true,
         sections: [{ id: "see-the-labels-on-our-application", title: "See the labels on our application" }, { id: "create-some-disposable-labelled-pods", title: "Create some disposable labelled Pods" }, { id: "why-selectors-matter", title: "Why selectors matter" }, { id: "annotations-are-different", title: "Annotations are different" }],
       },
       {
@@ -211,8 +198,7 @@ export const parts: Part[] = [
         minutes: 11,
         kind: "lab",
         commands: 9,
-        hasYaml: true,
-        sections: [{ id: "create-a-pod-with-resource-requirements", title: "Create a Pod with resource requirements" }, { id: "break-scheduling-on-purpose", title: "Break scheduling on purpose" }, { id: "resourcequota-and-limitrange", title: "ResourceQuota and LimitRange" }],
+        sections: [{ id: "create-a-pod-with-resource-requirements", title: "Create a Pod with resource requirements" }, { id: "break-scheduling-on-purpose", title: "Break scheduling on purpose" }, { id: "resourcequota-and-limitrange", title: "ResourceQuota and LimitRange" }, { id: "scheduling-controls-placement-not-api-permission", title: "Scheduling controls placement, not API permission" }],
       },
       {
         id: "ck-deployments-and-replicasets",
@@ -223,7 +209,6 @@ export const parts: Part[] = [
         minutes: 12,
         kind: "lab",
         commands: 10,
-        hasYaml: false,
         sections: [{ id: "inspect-the-deployment", title: "Inspect the Deployment" }, { id: "follow-ownership-through-the-api", title: "Follow ownership through the API" }, { id: "scaling-is-reconciliation-not-cloning", title: "Scaling is reconciliation, not cloning" }, { id: "the-pod-template-is-the-important-boundary", title: "The Pod template is the important boundary" }],
       },
       {
@@ -235,20 +220,18 @@ export const parts: Part[] = [
         minutes: 12,
         kind: "lab",
         commands: 10,
-        hasYaml: false,
         sections: [{ id: "check-the-current-image", title: "Check the current image" }, { id: "change-the-pod-template", title: "Change the Pod template" }, { id: "rollout-history", title: "Rollout history" }, { id: "roll-back", title: "Roll back" }, { id: "rollingupdate-strategy", title: "RollingUpdate strategy" }],
       },
       {
-        id: "ck-break-a-deployment-and-debug-the-rollout",
-        number: "9a",
-        title: "Break a Deployment and Debug the Rollout",
+        id: "ck-failed-rollouts-debugging-and-local-images",
+        number: "9",
+        title: "Failed Rollouts: Debugging and Local Images",
         blurb: "A failed rollout is more educational than a successful one.",
         tags: ["CKAD", "DEV"],
-        minutes: 50,
+        minutes: 46,
         kind: "lab",
-        commands: 40,
-        hasYaml: false,
-        sections: [{ id: "is-the-deployment-healthy", title: "Is the Deployment healthy?" }, { id: "which-replicaset-is-new", title: "Which ReplicaSet is new?" }, { id: "which-pod-is-failing", title: "Which Pod is failing?" }, { id: "fix-the-desired-state", title: "Fix the desired state" }, { id: "build-a-tiny-application-image", title: "Build a tiny application image" }, { id: "change-the-deployment-to-use-our-image", title: "Change the Deployment to use our image" }, { id: "watch-what-happens", title: "Watch what happens" }, { id: "follow-the-rollout-through-its-objects", title: "Follow the rollout through its objects" }, { id: "why-are-the-old-pods-still-running", title: "Why are the old Pods still running?" }, { id: "ask-the-failing-pod-why", title: "Ask the failing Pod why" }, { id: "errimagepull-and-imagepullbackoff", title: "ErrImagePull and ImagePullBackOff" }, { id: "your-docker-image-store-is-not-the-kubernetes-node", title: "Your Docker image store is not the Kubernetes node" }, { id: "load-the-image-into-kind", title: "Load the image into kind" }, { id: "watch-the-rollout-recover", title: "Watch the rollout recover" }, { id: "prove-that-our-application-is-running", title: "Prove that our application is running" }, { id: "make-a-v2", title: "Make a v2" }, { id: "why-use-a-new-image-tag", title: "Why use a new image tag?" }, { id: "what-this-sidequest-taught-us", title: "What this sidequest taught us" }],
+        commands: 36,
+        sections: [{ id: "experiment-1-deploy-an-image-that-does-not-exist", title: "Experiment 1 - deploy an image that does not exist" }, { id: "why-are-the-old-pods-still-running", title: "Why are the old Pods still running?" }, { id: "fix-the-desired-state", title: "Fix the desired state" }, { id: "sidequest-the-image-exists-so-why-cant-kubernetes-run-it", title: "Sidequest - the image exists, so why can't Kubernetes run it?" }, { id: "dockers-image-store-is-not-the-kind-nodes-image-store", title: "Docker's image store is not the kind node's image store" }, { id: "load-the-image-into-kind", title: "Load the image into kind" }, { id: "watch-reconciliation-continue", title: "Watch reconciliation continue" }, { id: "prove-that-our-application-is-running", title: "Prove that our application is running" }, { id: "do-the-workflow-correctly-with-v2", title: "Do the workflow correctly with v2" }, { id: "why-use-a-new-image-tag", title: "Why use a new image tag?" }, { id: "what-the-two-failures-taught-us", title: "What the two failures taught us" }],
       },
     ],
   },
@@ -268,7 +251,6 @@ export const parts: Part[] = [
         minutes: 5,
         kind: "lab",
         commands: 4,
-        hasYaml: false,
         sections: [{ id: "expose-the-deployment", title: "Expose the Deployment" }, { id: "how-does-the-service-find-pods", title: "How does the Service find Pods?" }],
       },
       {
@@ -280,7 +262,6 @@ export const parts: Part[] = [
         minutes: 11,
         kind: "lab",
         commands: 9,
-        hasYaml: false,
         sections: [{ id: "inspect-endpointslices", title: "Inspect EndpointSlices" }, { id: "create-a-client-pod", title: "Create a client Pod" }, { id: "service-dns", title: "Service DNS" }, { id: "compare-service-and-port-forward", title: "Compare Service and port-forward" }],
       },
       {
@@ -292,7 +273,6 @@ export const parts: Part[] = [
         minutes: 8,
         kind: "lab",
         commands: 7,
-        hasYaml: false,
         sections: [{ id: "break-the-selector", title: "Break the selector" }, { id: "fix-desired-state", title: "Fix desired state" }, { id: "a-useful-service-debugging-order", title: "A useful Service debugging order" }],
       },
     ],
@@ -308,12 +288,11 @@ export const parts: Part[] = [
         id: "ck-configmaps-configuration-without-rebuilding-the-image",
         number: "13",
         title: "ConfigMaps: Configuration Without Rebuilding the Image",
-        blurb: "Our nginx image contains its default page.",
+        blurb: "Our current nginx-based image has application content baked into it.",
         tags: ["CKAD"],
         minutes: 10,
         kind: "lab",
         commands: 8,
-        hasYaml: false,
         sections: [{ id: "create-configuration", title: "Create configuration" }, { id: "mount-the-configmap-into-the-application", title: "Mount the ConfigMap into the application" }, { id: "change-configuration", title: "Change configuration" }, { id: "configmap-as-environment-variables", title: "ConfigMap as environment variables" }],
       },
       {
@@ -325,7 +304,6 @@ export const parts: Part[] = [
         minutes: 8,
         kind: "lab",
         commands: 7,
-        hasYaml: true,
         sections: [{ id: "stringdata", title: "stringData" }, { id: "consume-a-secret-as-an-environment-variable", title: "Consume a Secret as an environment variable" }],
       },
       {
@@ -337,7 +315,6 @@ export const parts: Part[] = [
         minutes: 4,
         kind: "lab",
         commands: 3,
-        hasYaml: true,
         sections: [],
       },
       {
@@ -349,7 +326,6 @@ export const parts: Part[] = [
         minutes: 12,
         kind: "lab",
         commands: 10,
-        hasYaml: false,
         sections: [{ id: "readiness", title: "Readiness" }, { id: "liveness", title: "Liveness" }, { id: "startup", title: "Startup" }, { id: "add-readiness-and-liveness-to-nginx", title: "Add readiness and liveness to nginx" }, { id: "break-readiness-on-purpose", title: "Break readiness on purpose" }, { id: "follow-the-consequence-into-networking", title: "Follow the consequence into networking" }, { id: "fix-readiness", title: "Fix readiness" }],
       },
     ],
@@ -370,7 +346,6 @@ export const parts: Part[] = [
         minutes: 8,
         kind: "lab",
         commands: 7,
-        hasYaml: true,
         sections: [{ id: "shared-volume-experiment", title: "Shared-volume experiment" }, { id: "shared-networking", title: "Shared networking" }, { id: "container-specific-logs-and-exec", title: "Container-specific logs and exec" }],
       },
       {
@@ -382,7 +357,6 @@ export const parts: Part[] = [
         minutes: 5,
         kind: "lab",
         commands: 4,
-        hasYaml: true,
         sections: [{ id: "init-container-do-work-before-the-application-starts", title: "Init container: do work before the application starts" }, { id: "native-sidecar-supporting-process-for-the-pod-lifetime", title: "Native sidecar: supporting process for the Pod lifetime" }],
       },
     ],
@@ -403,7 +377,6 @@ export const parts: Part[] = [
         minutes: 14,
         kind: "lab",
         commands: 12,
-        hasYaml: false,
         sections: [{ id: "job-run-finite-work-to-completion", title: "Job: run finite work to completion" }, { id: "cronjob-create-jobs-on-a-schedule", title: "CronJob: create Jobs on a schedule" }],
       },
       {
@@ -415,7 +388,6 @@ export const parts: Part[] = [
         minutes: 13,
         kind: "lab",
         commands: 11,
-        hasYaml: true,
         sections: [{ id: "emptydir-data-that-belongs-to-a-pod", title: "emptyDir: data that belongs to a Pod" }, { id: "persistentvolumeclaim-ask-the-cluster-for-durable-storage", title: "PersistentVolumeClaim: ask the cluster for durable storage" }, { id: "prove-that-data-can-outlive-a-pod", title: "Prove that data can outlive a Pod" }],
       },
       {
@@ -427,7 +399,6 @@ export const parts: Part[] = [
         minutes: 6,
         kind: "lab",
         commands: 5,
-        hasYaml: true,
         sections: [{ id: "small-identity-experiment", title: "Small identity experiment" }],
       },
       {
@@ -439,7 +410,6 @@ export const parts: Part[] = [
         minutes: 4,
         kind: "lab",
         commands: 3,
-        hasYaml: true,
         sections: [],
       },
     ],
@@ -452,16 +422,15 @@ export const parts: Part[] = [
     blurb: "",
     chapters: [
       {
-        id: "ck-serviceaccounts-rbac-and-admission",
+        id: "ck-who-is-allowed-to-do-what-users-serviceaccounts-rbac-and-admission",
         number: "23",
-        title: "ServiceAccounts, RBAC and Admission",
-        blurb: "When a human or workload talks to the Kubernetes API, several separate questions are involved.",
-        tags: ["CKAD"],
-        minutes: 12,
+        title: "Who Is Allowed to Do What? Users, ServiceAccounts, RBAC and Admission",
+        blurb: "Until now we have mostly used kubectl as a highly privileged lab administrator.",
+        tags: ["CKAD", "DEV"],
+        minutes: 27,
         kind: "lab",
-        commands: 10,
-        hasYaml: true,
-        sections: [{ id: "serviceaccount-workload-identity", title: "ServiceAccount: workload identity" }, { id: "rbac-authorize-actions", title: "RBAC: authorize actions" }, { id: "role-vs-clusterrole", title: "Role vs ClusterRole" }, { id: "admission-control", title: "Admission control" }],
+        commands: 19,
+        sections: [{ id: "humans-and-workloads-use-different-kinds-of-identity", title: "Humans and workloads use different kinds of identity" }, { id: "lab-give-alice-namespace-scoped-developer-access", title: "Lab: give Alice namespace-scoped developer access" }, { id: "rbac-permissions-are-additive", title: "RBAC permissions are additive" }, { id: "a-permission-can-have-indirect-effects", title: "A permission can have indirect effects" }, { id: "serviceaccount-workload-identity", title: "ServiceAccount: workload identity" }, { id: "role-clusterrole-rolebinding-and-clusterrolebinding", title: "Role, ClusterRole, RoleBinding and ClusterRoleBinding" }, { id: "a-namespace-is-a-scope-not-an-automatic-security-boundary", title: "A namespace is a scope, not an automatic security boundary" }, { id: "api-permission-workload-placement-and-machine-access-are-different-controls", title: "API permission, workload placement and machine access are different controls" }, { id: "what-about-the-kubelet-itself", title: "What about the kubelet itself?" }, { id: "rbac-is-not-the-same-thing-as-multi-tenancy", title: "RBAC is not the same thing as multi-tenancy" }, { id: "admission-control", title: "Admission control" }, { id: "the-permission-model-to-keep", title: "The permission model to keep" }],
       },
       {
         id: "ck-securitycontext-and-container-privilege",
@@ -472,7 +441,6 @@ export const parts: Part[] = [
         minutes: 5,
         kind: "lab",
         commands: 4,
-        hasYaml: true,
         sections: [],
       },
     ],
@@ -493,7 +461,6 @@ export const parts: Part[] = [
         minutes: 8,
         kind: "lab",
         commands: 7,
-        hasYaml: true,
         sections: [{ id: "confirm-current-connectivity", title: "Confirm current connectivity" }, { id: "deny-ingress-to-the-api-pods", title: "Deny ingress to the API Pods" }, { id: "allow-only-labelled-clients", title: "Allow only labelled clients" }],
       },
       {
@@ -505,7 +472,6 @@ export const parts: Part[] = [
         minutes: 5,
         kind: "lab",
         commands: 4,
-        hasYaml: true,
         sections: [{ id: "check-whether-the-cluster-has-an-ingressclass", title: "Check whether the cluster has an IngressClass" }, { id: "create-an-ingress-rule", title: "Create an Ingress rule" }],
       },
     ],
@@ -526,7 +492,6 @@ export const parts: Part[] = [
         minutes: 6,
         kind: "lab",
         commands: 5,
-        hasYaml: true,
         sections: [{ id: "blue-green-switch-the-service-selector", title: "Blue-green: switch the Service selector" }, { id: "canary-two-versions-behind-one-service", title: "Canary: two versions behind one Service" }],
       },
       {
@@ -538,7 +503,6 @@ export const parts: Part[] = [
         minutes: 10,
         kind: "lab",
         commands: 9,
-        hasYaml: false,
         sections: [{ id: "create-a-local-chart", title: "Create a local chart" }, { id: "render-before-installing", title: "Render before installing" }, { id: "install", title: "Install" }],
       },
       {
@@ -550,7 +514,6 @@ export const parts: Part[] = [
         minutes: 7,
         kind: "lab",
         commands: 6,
-        hasYaml: true,
         sections: [{ id: "create-a-base", title: "Create a base" }, { id: "create-an-overlay", title: "Create an overlay" }],
       },
     ],
@@ -571,7 +534,6 @@ export const parts: Part[] = [
         minutes: 8,
         kind: "lab",
         commands: 7,
-        hasYaml: false,
         sections: [{ id: "validate-before-changing-the-cluster", title: "Validate before changing the cluster" }],
       },
       {
@@ -583,7 +545,6 @@ export const parts: Part[] = [
         minutes: 8,
         kind: "lab",
         commands: 7,
-        hasYaml: false,
         sections: [{ id: "workload-failure", title: "Workload failure" }, { id: "networking-failure", title: "Networking failure" }, { id: "configuration-failure", title: "Configuration failure" }, { id: "authorization-failure", title: "Authorization failure" }],
       },
       {
@@ -595,7 +556,6 @@ export const parts: Part[] = [
         minutes: 3,
         kind: "lab",
         commands: 2,
-        hasYaml: false,
         sections: [],
       },
     ],
@@ -616,7 +576,6 @@ export const parts: Part[] = [
         minutes: 8,
         kind: "lab",
         commands: 7,
-        hasYaml: true,
         sections: [{ id: "create-a-crd", title: "Create a CRD" }, { id: "create-a-custom-resource", title: "Create a Custom Resource" }],
       },
       {
@@ -628,7 +587,6 @@ export const parts: Part[] = [
         minutes: 2,
         kind: "brief",
         commands: 0,
-        hasYaml: true,
         sections: [],
       },
       {
@@ -640,7 +598,6 @@ export const parts: Part[] = [
         minutes: 11,
         kind: "lab",
         commands: 8,
-        hasYaml: true,
         sections: [{ id: "ownership", title: "Ownership" }, { id: "finalizers", title: "Finalizers" }, { id: "status-and-conditions", title: "Status and conditions" }, { id: "operators", title: "Operators" }, { id: "controller-failure-modes", title: "Controller failure modes" }],
       },
       {
@@ -652,7 +609,6 @@ export const parts: Part[] = [
         minutes: 3,
         kind: "lab",
         commands: 3,
-        hasYaml: false,
         sections: [],
       },
     ],
@@ -673,7 +629,6 @@ export const parts: Part[] = [
         minutes: 35,
         kind: "lab",
         commands: 31,
-        hasYaml: false,
         sections: [{ id: "context-and-namespace", title: "Context and namespace" }, { id: "discovery", title: "Discovery" }, { id: "pods", title: "Pods" }, { id: "deployments", title: "Deployments" }, { id: "services", title: "Services" }, { id: "configmaps-and-secrets", title: "ConfigMaps and Secrets" }, { id: "jobs-and-cronjobs", title: "Jobs and CronJobs" }, { id: "editing-and-patching", title: "Editing and patching" }, { id: "output", title: "Output" }, { id: "waiting", title: "Waiting" }, { id: "debugging", title: "Debugging" }, { id: "temporary-testing-pods", title: "Temporary testing Pods" }, { id: "useful-shell-habit", title: "Useful shell habit" }],
       },
       {
@@ -685,7 +640,6 @@ export const parts: Part[] = [
         minutes: 3,
         kind: "lab",
         commands: 3,
-        hasYaml: false,
         sections: [],
       },
     ],
@@ -706,8 +660,7 @@ export const parts: Part[] = [
         minutes: 2,
         kind: "brief",
         commands: 0,
-        hasYaml: false,
-        sections: [{ id: "kubernetes-is-a-control-loop", title: "Kubernetes is a control loop" }, { id: "controller-managed-pods-are-replaceable", title: "Controller-managed Pods are replaceable" }, { id: "a-service-is-stable-because-pods-are-not", title: "A Service is stable because Pods are not" }, { id: "labels-are-relationships-not-decoration", title: "Labels are relationships, not decoration" }, { id: "readiness-and-liveness-answer-different-questions", title: "Readiness and liveness answer different questions" }, { id: "configuration-should-not-require-rebuilding-the-image", title: "Configuration should not require rebuilding the image" }, { id: "data-lifetime-is-a-separate-decision-from-pod-lifetime", title: "Data lifetime is a separate decision from Pod lifetime" }, { id: "debug-relationships-rather-than-symptoms", title: "Debug relationships rather than symptoms" }, { id: "kubernetes-extension-uses-the-same-model", title: "Kubernetes extension uses the same model" }],
+        sections: [{ id: "kubernetes-is-a-control-loop", title: "Kubernetes is a control loop" }, { id: "controller-managed-pods-are-replaceable", title: "Controller-managed Pods are replaceable" }, { id: "a-service-is-stable-because-pods-are-not", title: "A Service is stable because Pods are not" }, { id: "labels-are-relationships-not-decoration", title: "Labels are relationships, not decoration" }, { id: "readiness-and-liveness-answer-different-questions", title: "Readiness and liveness answer different questions" }, { id: "configuration-should-not-require-rebuilding-the-image", title: "Configuration should not require rebuilding the image" }, { id: "data-lifetime-is-a-separate-decision-from-pod-lifetime", title: "Data lifetime is a separate decision from Pod lifetime" }, { id: "debug-relationships-rather-than-symptoms", title: "Debug relationships rather than symptoms" }, { id: "security-boundaries-answer-different-questions", title: "Security boundaries answer different questions" }, { id: "kubernetes-extension-uses-the-same-model", title: "Kubernetes extension uses the same model" }],
       },
       {
         id: "ck-current-ckad-domain-map",
@@ -718,7 +671,6 @@ export const parts: Part[] = [
         minutes: 2,
         kind: "brief",
         commands: 0,
-        hasYaml: false,
         sections: [{ id: "application-design-and-build-20", title: "Application Design and Build - 20%" }, { id: "application-deployment-20", title: "Application Deployment - 20%" }, { id: "application-observability-and-maintenance-15", title: "Application Observability and Maintenance - 15%" }, { id: "application-environment-configuration-and-security-25", title: "Application Environment, Configuration and Security - 25%" }, { id: "services-and-networking-20", title: "Services and Networking - 20%" }],
       },
       {
@@ -730,28 +682,26 @@ export const parts: Part[] = [
         minutes: 2,
         kind: "brief",
         commands: 0,
-        hasYaml: false,
         sections: [],
       },
     ],
   },
   {
-    id: "part-appendix-c-kubernetes-from-parts",
-    title: "Appendix C — Kubernetes from parts",
-    volume: "CKA territory",
+    id: "part-build-kubernetes-on-linux-with-kubeadm",
+    title: "Build Kubernetes on Linux with kubeadm",
+    volume: "Beyond the exam",
     numeral: "C",
-    blurb: "Build a cluster by hand with kubeadm, containerd and Cilium. Watch it not work yet, and find out why.",
+    blurb: "A runnable companion to the Kubernetes application developer cookbook. It is intentionally CKA / platform-engineering territory.",
     chapters: [
       {
         id: "c-build-kubernetes-on-linux-with-kubeadm",
-        number: "C",
-        title: "Build Kubernetes on Linux with kubeadm",
-        blurb: "A runnable companion to the Kubernetes application developer cookbook. It is intentionally CKA / platform-engineering territory.",
+        number: null,
+        title: "Introduction",
+        blurb: "",
         tags: [],
         minutes: 2,
         kind: "brief",
         commands: 0,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -763,7 +713,6 @@ export const parts: Part[] = [
         minutes: 2,
         kind: "lab",
         commands: 1,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -775,7 +724,6 @@ export const parts: Part[] = [
         minutes: 2,
         kind: "brief",
         commands: 0,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -787,7 +735,6 @@ export const parts: Part[] = [
         minutes: 2,
         kind: "brief",
         commands: 0,
-        hasYaml: false,
         sections: [{ id: "kubectl", title: "kubectl" }, { id: "kubelet", title: "kubelet" }, { id: "containerd", title: "containerd" }, { id: "kubeadm", title: "kubeadm" }, { id: "cilium", title: "Cilium" }],
       },
       {
@@ -799,7 +746,6 @@ export const parts: Part[] = [
         minutes: 6,
         kind: "lab",
         commands: 5,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -811,7 +757,6 @@ export const parts: Part[] = [
         minutes: 4,
         kind: "lab",
         commands: 3,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -823,7 +768,6 @@ export const parts: Part[] = [
         minutes: 3,
         kind: "lab",
         commands: 3,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -835,7 +779,6 @@ export const parts: Part[] = [
         minutes: 9,
         kind: "lab",
         commands: 8,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -847,7 +790,6 @@ export const parts: Part[] = [
         minutes: 11,
         kind: "lab",
         commands: 10,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -859,7 +801,6 @@ export const parts: Part[] = [
         minutes: 7,
         kind: "lab",
         commands: 6,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -871,7 +812,6 @@ export const parts: Part[] = [
         minutes: 3,
         kind: "lab",
         commands: 3,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -883,7 +823,6 @@ export const parts: Part[] = [
         minutes: 5,
         kind: "lab",
         commands: 4,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -895,7 +834,6 @@ export const parts: Part[] = [
         minutes: 2,
         kind: "lab",
         commands: 2,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -907,7 +845,6 @@ export const parts: Part[] = [
         minutes: 2,
         kind: "lab",
         commands: 2,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -919,7 +856,6 @@ export const parts: Part[] = [
         minutes: 4,
         kind: "lab",
         commands: 3,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -931,7 +867,6 @@ export const parts: Part[] = [
         minutes: 7,
         kind: "lab",
         commands: 6,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -943,7 +878,6 @@ export const parts: Part[] = [
         minutes: 5,
         kind: "lab",
         commands: 4,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -955,7 +889,6 @@ export const parts: Part[] = [
         minutes: 3,
         kind: "lab",
         commands: 3,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -967,7 +900,6 @@ export const parts: Part[] = [
         minutes: 3,
         kind: "lab",
         commands: 3,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -979,7 +911,6 @@ export const parts: Part[] = [
         minutes: 9,
         kind: "lab",
         commands: 8,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -991,7 +922,6 @@ export const parts: Part[] = [
         minutes: 2,
         kind: "lab",
         commands: 2,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1003,7 +933,6 @@ export const parts: Part[] = [
         minutes: 6,
         kind: "lab",
         commands: 5,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1015,7 +944,6 @@ export const parts: Part[] = [
         minutes: 5,
         kind: "lab",
         commands: 4,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1027,7 +955,6 @@ export const parts: Part[] = [
         minutes: 5,
         kind: "lab",
         commands: 4,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1039,7 +966,6 @@ export const parts: Part[] = [
         minutes: 8,
         kind: "lab",
         commands: 7,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1051,7 +977,6 @@ export const parts: Part[] = [
         minutes: 3,
         kind: "lab",
         commands: 3,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1063,7 +988,6 @@ export const parts: Part[] = [
         minutes: 2,
         kind: "lab",
         commands: 1,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1075,7 +999,6 @@ export const parts: Part[] = [
         minutes: 2,
         kind: "lab",
         commands: 2,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1087,7 +1010,6 @@ export const parts: Part[] = [
         minutes: 6,
         kind: "lab",
         commands: 5,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1099,7 +1021,6 @@ export const parts: Part[] = [
         minutes: 2,
         kind: "lab",
         commands: 2,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1111,7 +1032,6 @@ export const parts: Part[] = [
         minutes: 6,
         kind: "lab",
         commands: 5,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1123,7 +1043,6 @@ export const parts: Part[] = [
         minutes: 3,
         kind: "lab",
         commands: 3,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1135,7 +1054,6 @@ export const parts: Part[] = [
         minutes: 2,
         kind: "brief",
         commands: 0,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1147,7 +1065,6 @@ export const parts: Part[] = [
         minutes: 2,
         kind: "lab",
         commands: 1,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1159,7 +1076,6 @@ export const parts: Part[] = [
         minutes: 2,
         kind: "brief",
         commands: 0,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1171,7 +1087,6 @@ export const parts: Part[] = [
         minutes: 2,
         kind: "brief",
         commands: 0,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1183,28 +1098,26 @@ export const parts: Part[] = [
         minutes: 2,
         kind: "brief",
         commands: 0,
-        hasYaml: false,
         sections: [],
       },
     ],
   },
   {
-    id: "part-appendix-d-cilium-ebpf-and-gateway-api",
-    title: "Appendix D — Cilium, eBPF and Gateway API",
-    volume: "Platform",
+    id: "part-cilium-ebpf-and-gateway-api",
+    title: "Cilium, eBPF and Gateway API",
+    volume: "Beyond the exam",
     numeral: "D",
-    blurb: "Follow a request from an HTTPRoute all the way down to eBPF, then observe it with Hubble.",
+    blurb: "A runnable networking deep dive for the Kubernetes cookbook.",
     chapters: [
       {
         id: "d-cilium-ebpf-and-gateway-api",
-        number: "D",
-        title: "Cilium, eBPF and Gateway API",
-        blurb: "A runnable networking deep dive for the Kubernetes cookbook.",
+        number: null,
+        title: "Introduction",
+        blurb: "",
         tags: [],
         minutes: 2,
         kind: "brief",
         commands: 0,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1216,7 +1129,6 @@ export const parts: Part[] = [
         minutes: 2,
         kind: "brief",
         commands: 0,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1228,7 +1140,6 @@ export const parts: Part[] = [
         minutes: 2,
         kind: "brief",
         commands: 0,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1240,7 +1151,6 @@ export const parts: Part[] = [
         minutes: 5,
         kind: "lab",
         commands: 4,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1252,7 +1162,6 @@ export const parts: Part[] = [
         minutes: 5,
         kind: "lab",
         commands: 4,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1264,7 +1173,6 @@ export const parts: Part[] = [
         minutes: 6,
         kind: "lab",
         commands: 5,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1276,7 +1184,6 @@ export const parts: Part[] = [
         minutes: 2,
         kind: "lab",
         commands: 2,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1288,7 +1195,6 @@ export const parts: Part[] = [
         minutes: 10,
         kind: "lab",
         commands: 9,
-        hasYaml: true,
         sections: [],
       },
       {
@@ -1300,7 +1206,6 @@ export const parts: Part[] = [
         minutes: 5,
         kind: "lab",
         commands: 4,
-        hasYaml: true,
         sections: [],
       },
       {
@@ -1312,7 +1217,6 @@ export const parts: Part[] = [
         minutes: 5,
         kind: "lab",
         commands: 4,
-        hasYaml: true,
         sections: [],
       },
       {
@@ -1324,7 +1228,6 @@ export const parts: Part[] = [
         minutes: 6,
         kind: "lab",
         commands: 5,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1336,7 +1239,6 @@ export const parts: Part[] = [
         minutes: 4,
         kind: "lab",
         commands: 3,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1348,7 +1250,6 @@ export const parts: Part[] = [
         minutes: 8,
         kind: "lab",
         commands: 7,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1360,7 +1261,6 @@ export const parts: Part[] = [
         minutes: 3,
         kind: "lab",
         commands: 3,
-        hasYaml: true,
         sections: [],
       },
       {
@@ -1372,7 +1272,6 @@ export const parts: Part[] = [
         minutes: 2,
         kind: "lab",
         commands: 2,
-        hasYaml: true,
         sections: [],
       },
       {
@@ -1384,7 +1283,6 @@ export const parts: Part[] = [
         minutes: 2,
         kind: "lab",
         commands: 1,
-        hasYaml: true,
         sections: [],
       },
       {
@@ -1396,7 +1294,6 @@ export const parts: Part[] = [
         minutes: 8,
         kind: "lab",
         commands: 7,
-        hasYaml: true,
         sections: [],
       },
       {
@@ -1408,7 +1305,6 @@ export const parts: Part[] = [
         minutes: 2,
         kind: "lab",
         commands: 1,
-        hasYaml: true,
         sections: [],
       },
       {
@@ -1420,7 +1316,6 @@ export const parts: Part[] = [
         minutes: 2,
         kind: "lab",
         commands: 2,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1432,7 +1327,6 @@ export const parts: Part[] = [
         minutes: 5,
         kind: "lab",
         commands: 4,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1444,7 +1338,6 @@ export const parts: Part[] = [
         minutes: 8,
         kind: "lab",
         commands: 7,
-        hasYaml: true,
         sections: [],
       },
       {
@@ -1456,7 +1349,6 @@ export const parts: Part[] = [
         minutes: 8,
         kind: "lab",
         commands: 7,
-        hasYaml: true,
         sections: [],
       },
       {
@@ -1468,7 +1360,6 @@ export const parts: Part[] = [
         minutes: 2,
         kind: "lab",
         commands: 2,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1480,7 +1371,6 @@ export const parts: Part[] = [
         minutes: 8,
         kind: "lab",
         commands: 7,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1492,7 +1382,6 @@ export const parts: Part[] = [
         minutes: 5,
         kind: "lab",
         commands: 4,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1504,7 +1393,6 @@ export const parts: Part[] = [
         minutes: 6,
         kind: "lab",
         commands: 5,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1516,7 +1404,6 @@ export const parts: Part[] = [
         minutes: 9,
         kind: "lab",
         commands: 8,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1528,7 +1415,6 @@ export const parts: Part[] = [
         minutes: 2,
         kind: "lab",
         commands: 2,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1540,7 +1426,6 @@ export const parts: Part[] = [
         minutes: 2,
         kind: "brief",
         commands: 0,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1552,7 +1437,6 @@ export const parts: Part[] = [
         minutes: 2,
         kind: "brief",
         commands: 0,
-        hasYaml: true,
         sections: [],
       },
       {
@@ -1564,7 +1448,6 @@ export const parts: Part[] = [
         minutes: 6,
         kind: "lab",
         commands: 5,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1576,7 +1459,6 @@ export const parts: Part[] = [
         minutes: 2,
         kind: "brief",
         commands: 0,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1588,7 +1470,6 @@ export const parts: Part[] = [
         minutes: 2,
         kind: "brief",
         commands: 0,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1600,7 +1481,6 @@ export const parts: Part[] = [
         minutes: 2,
         kind: "brief",
         commands: 0,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1612,7 +1492,6 @@ export const parts: Part[] = [
         minutes: 2,
         kind: "brief",
         commands: 0,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1624,7 +1503,6 @@ export const parts: Part[] = [
         minutes: 2,
         kind: "brief",
         commands: 0,
-        hasYaml: false,
         sections: [],
       },
       {
@@ -1636,15 +1514,155 @@ export const parts: Part[] = [
         minutes: 2,
         kind: "brief",
         commands: 0,
-        hasYaml: false,
+        sections: [],
+      },
+    ],
+  },
+  {
+    id: "part-from-rbac-to-multi-tenant-kubernetes",
+    title: "From RBAC to Multi-Tenant Kubernetes",
+    volume: "Beyond the exam",
+    numeral: "E",
+    blurb: "This companion starts where the main cookbook's RBAC chapter stops.",
+    chapters: [
+      {
+        id: "mt-from-rbac-to-multi-tenant-kubernetes",
+        number: null,
+        title: "Introduction",
+        blurb: "",
+        tags: ["DEV", "DEEP DIVE"],
+        minutes: 2,
+        kind: "brief",
+        commands: 0,
+        sections: [],
+      },
+      {
+        id: "mt-one-shared-cluster-namespace-rbac",
+        number: "1",
+        title: "One Shared Cluster: Namespace + RBAC",
+        blurb: "The simplest multi-team model is one Kubernetes cluster with one API server.",
+        tags: [],
+        minutes: 2,
+        kind: "brief",
+        commands: 0,
+        sections: [],
+      },
+      {
+        id: "mt-think-in-isolation-layers",
+        number: "2",
+        title: "Think in Isolation Layers",
+        blurb: "A useful tenancy model has several layers.",
+        tags: [],
+        minutes: 2,
+        kind: "brief",
+        commands: 0,
+        sections: [],
+      },
+      {
+        id: "mt-why-give-a-tenant-its-own-api-server",
+        number: "3",
+        title: "Why Give a Tenant Its Own API Server?",
+        blurb: "Suppose Alice needs enough freedom to behave like a cluster administrator.",
+        tags: [],
+        minutes: 2,
+        kind: "brief",
+        commands: 0,
+        sections: [],
+      },
+      {
+        id: "mt-vcluster-a-tenant-kubernetes-api-above-provider-infrastructure",
+        number: "4",
+        title: "vCluster: A Tenant Kubernetes API Above Provider Infrastructure",
+        blurb: "Current vCluster architecture gives each tenant cluster its own control plane, including its own Kubernetes API server, controller manager, datastore and syncer.",
+        tags: [],
+        minutes: 2,
+        kind: "brief",
+        commands: 0,
+        sections: [{ id: "4-1-shared-node-mode", title: "4.1 Shared-node mode" }, { id: "4-2-private-node-mode", title: "4.2 Private-node mode" }, { id: "4-3-taints-and-dedicated-pools-are-not-automatically-private-nodes", title: "4.3 Taints and dedicated pools are not automatically private nodes" }],
+      },
+      {
+        id: "mt-kamaji-hosted-upstream-control-planes",
+        number: "5",
+        title: "Kamaji: Hosted Upstream Control Planes",
+        blurb: "Kamaji approaches the problem differently.",
+        tags: [],
+        minutes: 2,
+        kind: "brief",
+        commands: 0,
+        sections: [{ id: "5-1-tenantcontrolplane-is-itself-declarative-kubernetes", title: "5.1 TenantControlPlane is itself declarative Kubernetes" }],
+      },
+      {
+        id: "mt-vcluster-and-kamaji-solve-related-problems-differently",
+        number: "6",
+        title: "vCluster and Kamaji Solve Related Problems Differently",
+        blurb: "Do not read this table as a product scorecard.",
+        tags: [],
+        minutes: 2,
+        kind: "brief",
+        commands: 0,
+        sections: [],
+      },
+      {
+        id: "mt-the-control-plane-node-question-revisited",
+        number: "7",
+        title: "The Control-Plane Node Question Revisited",
+        blurb: "There are several separate meanings hiding inside that sentence.",
+        tags: [],
+        minutes: 2,
+        kind: "lab",
+        commands: 1,
+        sections: [{ id: "7-1-may-the-user-modify-node-api-objects", title: "7.1 May the user modify Node API objects?" }, { id: "7-2-may-the-users-pod-run-on-infrastructure-nodes", title: "7.2 May the user's Pod run on infrastructure nodes?" }, { id: "7-3-may-the-user-log-into-the-machine", title: "7.3 May the user log into the machine?" }, { id: "7-4-does-the-tenant-need-to-see-the-provider-control-plane-at-all", title: "7.4 Does the tenant need to see the provider control plane at all?" }],
+      },
+      {
+        id: "mt-stronger-tenancy-is-a-stack-of-controls",
+        number: "8",
+        title: "Stronger Tenancy Is a Stack of Controls",
+        blurb: "The exact implementation varies, but the model is portable.",
+        tags: [],
+        minutes: 2,
+        kind: "brief",
+        commands: 0,
+        sections: [],
+      },
+      {
+        id: "mt-a-useful-decision-sequence",
+        number: "9",
+        title: "A Useful Decision Sequence",
+        blurb: "When designing a platform, ask these questions in order.",
+        tags: [],
+        minutes: 2,
+        kind: "brief",
+        commands: 0,
+        sections: [],
+      },
+      {
+        id: "mt-connect-this-back-to-the-cookbook",
+        number: "10",
+        title: "Connect This Back to the Cookbook",
+        blurb: "Nearly everything in this architecture comes from concepts we already learned.",
+        tags: [],
+        minutes: 2,
+        kind: "brief",
+        commands: 0,
+        sections: [],
+      },
+      {
+        id: "mt-official-references",
+        number: "11",
+        title: "Official References",
+        blurb: "The architecture of these projects evolves, so use their current documentation when making a real platform decision.",
+        tags: [],
+        minutes: 2,
+        kind: "brief",
+        commands: 0,
         sections: [],
       },
     ],
   },
 ]
 
-export const flatChapters = parts.flatMap((part, partIndex) =>
-  part.chapters.map((chapter, indexInPart) => ({ ...chapter, part, partIndex, indexInPart })),
+export const flatChapters = parts.flatMap((part) =>
+  part.chapters.map((chapter) => ({ ...chapter, part })),
 )
 
 export type FlatChapter = (typeof flatChapters)[number]
@@ -1665,8 +1683,6 @@ export function neighbours(id: string) {
   }
 }
 
-export const volumes = [...new Set(parts.map((p) => p.volume))]
-
 export const totals = {
   parts: parts.length,
   chapters: flatChapters.length,
@@ -1681,4 +1697,22 @@ export function formatDuration(minutes: number) {
   if (!h) return `${m} min`
   if (!m) return `${h} hr`
   return `${h} hr ${m} min`
+}
+
+/**
+ * Lifted from the cookbook's own preamble so the landing page quotes the
+ * author rather than a copy of him.
+ */
+export const intro = {
+  statement: "A runnable Kubernetes cookbook for application developers and CKAD candidates. The goal is not to memorise YAML. The goal is to build a mental model of Kubernetes, use the API deliberately, observe what the control plane did, break things on purpose, and work out why they broke.",
+  target: "Kubernetes 1.35 and the current CKAD curriculum.",
+  /** short form for the hero flag, e.g. "Kubernetes 1.35" */
+  version: "Kubernetes 1.35",
+  legend: [
+    { tag: "CKAD", meaning: "Directly relevant to CKAD." },
+    { tag: "DEV", meaning: "Practical application developer knowledge." },
+    { tag: "DEEP DIVE", meaning: "Controllers, operators and platform engineering." },
+  ] as { tag: Tag; meaning: string }[],
+  /** the recurring teaching loop, drawn by the author */
+  diagram: "problem\n  |\n  v\nmental model\n  |\n  v\nsmall experiment\n  |\n  v\nobserve Kubernetes\n  |\n  v\nchange one thing\n  |\n  v\nobserve the consequence\n  |\n  v\nbreak an assumption\n  |\n  v\nexplain why",
 }

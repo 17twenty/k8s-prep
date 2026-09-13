@@ -2,7 +2,9 @@
 
 A runnable Kubernetes cookbook for application developers and CKAD candidates.
 
-The goal is not to memorise YAML, we're going to build a mental model of Kubernetes, use the API deliberately, observe what the control plane did, break things on purpose, and work out why they broke.
+The goal is not to memorise YAML.
+
+The goal is to build a mental model of Kubernetes, use the API deliberately, observe what the control plane did, break things on purpose, and work out why they broke.
 
 **Target:** Kubernetes 1.35 and the current CKAD curriculum.
 
@@ -1443,6 +1445,24 @@ LimitRange      -> policy/defaults around individual workloads
 ResourceQuota   -> aggregate namespace budget
 ```
 
+## Scheduling controls placement, not API permission
+
+Later we will meet node selectors, affinity, taints and tolerations in broader platform contexts.
+
+Keep one distinction in mind now:
+
+```text
+scheduler controls
+    -> where a Pod is eligible to run
+
+RBAC
+    -> what API operations an identity may perform
+```
+
+A `NoSchedule` taint on a control-plane node can keep ordinary workloads away from that node. It does **not** decide who may edit Node objects through the API, and it does not control who may SSH into the machine.
+
+We will bring those boundaries together in Chapter 23.
+
 ---
 
 # 7. Deployments and ReplicaSets [CKAD]
@@ -1666,11 +1686,23 @@ Do not memorise defaults when `kubectl explain` can tell you what the current AP
 
 ---
 
-# 9a. Break a Deployment and Debug the Rollout [CKAD] [DEV]
+# 9. Failed Rollouts: Debugging and Local Images [CKAD] [DEV]
 
 A failed rollout is more educational than a successful one.
 
-Deploy an image that does not exist:
+We will fail one in two different ways.
+
+The first failure is obvious: we ask for an image that does not exist. That gives us a controlled way to learn the debugging path and rollback.
+
+The second failure is more interesting: we build an image ourselves, prove that it exists, and Kubernetes still cannot run it.
+
+Those two failures can produce the same Pod status for very different reasons.
+
+That is exactly why good debugging starts with evidence rather than memorising status names.
+
+## Experiment 1 - deploy an image that does not exist
+
+Change the Deployment to an image tag that is deliberately invalid:
 
 ```bash
 kubectl set image deployment/api \
@@ -1680,16 +1712,23 @@ kubectl set image deployment/api \
 Watch Pods:
 
 ```bash
-kubectl get pods -l app=api
+kubectl get pods -l app=api -w
 ```
 
-You should see a new Pod eventually enter an image pull backoff state.
+You should eventually see a new Pod move through states such as:
 
-Do not just memorise `ImagePullBackOff`.
+```text
+ErrImagePull
+ImagePullBackOff
+```
+
+Press `Ctrl-C` once you have seen the failure.
+
+Do not just memorise what `ImagePullBackOff` means.
 
 Follow the object chain.
 
-## Is the Deployment healthy?
+### Is the Deployment healthy?
 
 ```bash
 kubectl get deployment api
@@ -1701,25 +1740,25 @@ Try waiting for the rollout, but use a short timeout so the lab does not wait fo
 kubectl rollout status deployment/api --timeout=30s
 ```
 
-## Which ReplicaSet is new?
+### Which ReplicaSet is new?
 
 ```bash
 kubectl get rs -l app=api
 ```
 
-## Which Pod is failing?
+### Which Pod is failing?
 
 ```bash
 kubectl get pods -l app=api
 ```
 
-Pick the failing Pod:
+Describe the failing Pod:
 
 ```bash
 kubectl describe pod <failing-pod>
 ```
 
-The Events section should explain the image pull failure.
+The **Events** section should explain the image pull failure.
 
 Cluster events can also help:
 
@@ -1728,7 +1767,7 @@ kubectl get events \
   --sort-by=.metadata.creationTimestamp
 ```
 
-The debugging chain was:
+The debugging path was:
 
 ```text
 Deployment
@@ -1745,6 +1784,50 @@ container image
     v
 image pull event
 ```
+
+The high-level status told us **where reconciliation was stuck**.
+
+Events told us **why**.
+
+## Why are the old Pods still running?
+
+This is a useful consequence of the rolling update strategy from the previous chapter.
+
+Inspect the Deployment and ReplicaSets together:
+
+```bash
+kubectl get deployment,rs,pods -l app=api
+```
+
+You may see three healthy old Pods plus one broken new Pod.
+
+Conceptually:
+
+```text
+Deployment api
+    |
+    +-- old ReplicaSet
+    |      +-- Running Pod
+    |      +-- Running Pod
+    |      +-- Running Pod
+    |
+    +-- new ReplicaSet
+           +-- ImagePullBackOff
+```
+
+Kubernetes has not forgotten that you asked for three replicas.
+
+But the desired state now means more than just a number:
+
+```text
+replicas = 3
+AND
+image = nginx:this-tag-does-not-exist
+```
+
+Reality currently satisfies the replica availability requirement using the old version, but it cannot satisfy the new Pod template.
+
+A rolling update therefore stalls instead of immediately throwing away every healthy old Pod.
 
 ## Fix the desired state
 
@@ -1767,33 +1850,19 @@ We did not repair individual broken Pods.
 
 We corrected desired state and let Kubernetes converge.
 
-9b Sidequest: Build Your Own Image and Debug a Failed Rollout [CKAD] [DEV]
+---
 
-So far we have used images that already exist in a public registry.
+## Sidequest - the image exists, so why can't Kubernetes run it?
 
-That hides an important part of the application lifecycle:
+The previous failure was unsurprising.
 
-```text
-source
-  |
-  v
-build image
-  |
-  v
-make image available to cluster
-  |
-  v
-change desired state
-  |
-  v
-Kubernetes rolls it out
-```
+The image did not exist.
 
-Let's build an image ourselves.
+Now let's create an image that definitely **does** exist and see why Kubernetes may still report the same failure.
 
-This will also give us a much more realistic failure to debug.
+This is a useful developer workflow as well as a debugging exercise.
 
-## Build a tiny application image
+### Build a tiny application image
 
 Create a temporary working directory:
 
@@ -1831,7 +1900,7 @@ Build it:
 docker build -t example/web:v1 .
 ```
 
-Check that Docker knows about it:
+Confirm that Docker can see it:
 
 ```bash
 docker image inspect example/web:v1 \
@@ -1850,21 +1919,13 @@ docker build
 example/web:v1
 ```
 
-But where does that image actually exist?
+So the image exists.
 
-For now:
+The next question is **where** it exists.
 
-```text
-your local Docker image store
-```
+### Before changing the Deployment, inspect the container name
 
-That distinction will matter shortly.
-
----
-
-## Change the Deployment to use our image
-
-Before changing anything, inspect the containers in the Deployment:
+Run:
 
 ```bash
 kubectl get deployment api \
@@ -1877,13 +1938,11 @@ You should see something similar to:
 nginx -> nginx:1.27-alpine
 ```
 
-There are three different names involved here:
+There are three separate identities here:
 
 ```text
 Deployment name: api
-
 container name:  nginx
-
 image name:      nginx:1.27-alpine
 ```
 
@@ -1892,39 +1951,33 @@ They are not interchangeable.
 `kubectl set image` uses:
 
 ```text
-kubectl set image <resource> <container-name>=<image>
+kubectl set image <resource> <container-name>=<new-image>
 ```
 
-So change the `nginx` container to our new image:
+So this is correct:
 
 ```bash
 kubectl set image deployment/api \
   nginx=example/web:v1
 ```
 
-This modifies:
+This would not be correct if the container were not named `web`:
 
 ```text
-.spec.template.spec.containers[0].image
+kubectl set image deployment/api web=example/web:v1
+                                 ^^^
+                                 container name
 ```
 
-It does **not** reach into the existing Pods and replace their containers.
+Kubernetes is not identifying the container from the image name.
 
-We changed the desired Pod template.
-
-That means the Deployment controller must perform another rollout.
-
----
-
-## Watch what happens
-
-In one terminal:
+### Watch the rollout
 
 ```bash
-kubectl get pods -w
+kubectl get pods -l app=api -w
 ```
 
-You may see something like:
+On the `kind` lab cluster, you will probably see something like:
 
 ```text
 NAME                  READY   STATUS             RESTARTS
@@ -1935,240 +1988,59 @@ api-8fc59985f-4nhhm   0/1     ErrImagePull       0
 api-8fc59985f-4nhhm   0/1     ImagePullBackOff   0
 ```
 
-Interesting.
+Press `Ctrl-C` once the failure appears.
 
-We asked for a new image.
+This looks very similar to our deliberately broken rollout.
 
-Kubernetes created a new Pod.
+But this time we know:
 
-But the Pod cannot start.
+```text
+example/web:v1 exists
+```
 
-Before fixing it, inspect what Kubernetes has done.
+So "image does not exist" cannot be the whole explanation.
 
----
+### Use the debugging path again
 
-## Follow the rollout through its objects
-
-Look at the Deployment:
+Check the rollout:
 
 ```bash
-kubectl get deployment api
+kubectl rollout status deployment/api --timeout=30s
 ```
 
-Then its ReplicaSets:
+Inspect the ReplicaSets and Pods:
 
 ```bash
-kubectl get rs -l app=api
+kubectl get deployment,rs,pods -l app=api
 ```
 
-And its Pods:
+Describe the failing Pod:
 
 ```bash
-kubectl get pods -l app=api
+kubectl describe pod <failing-pod>
 ```
 
-You should now have two ReplicaSets.
+Read the Events at the bottom.
 
-Conceptually:
-
-```text
-Deployment api
-    |
-    +-- old ReplicaSet
-    |      |
-    |      +-- Running Pod
-    |      +-- Running Pod
-    |      +-- Running Pod
-    |
-    +-- new ReplicaSet
-           |
-           +-- ImagePullBackOff
-```
-
-The different hashes in the Pod names identify the ReplicaSet templates:
-
-```text
-api-6645d7d87-xxxxx
-    ^^^^^^^^^
-
-api-8fc59985f-yyyyy
-    ^^^^^^^^^
-```
-
-A new Pod template caused Kubernetes to create a new ReplicaSet.
-
----
-
-## Why are the old Pods still running?
-
-This is an important property of a rolling Deployment.
-
-Inspect the strategy:
-
-```bash
-kubectl get deployment api \
-  -o jsonpath='{.spec.strategy}{"\n"}'
-```
-
-A Deployment normally uses a `RollingUpdate`.
-
-The two important controls are:
-
-```text
-maxSurge
-maxUnavailable
-```
-
-With three replicas and the default percentage-based strategy, Kubernetes can effectively create one additional Pod while keeping the existing three available.
-
-So we currently have something like:
-
-```text
-desired replicas:       3
-
-old ready replicas:     3
-new attempted replicas: 1
-new ready replicas:     0
-
-total Pods:              4
-```
-
-The new version is broken.
-
-Kubernetes therefore does **not** eagerly destroy all three working Pods.
-
-The rollout has stalled while the old application remains available.
-
-This is reconciliation doing something more subtle than:
-
-```text
-3 desired == 3 running
-```
-
-Our desired state now includes both:
-
-```text
-replicas: 3
-```
-
-and:
-
-```text
-image: example/web:v1
-```
-
-Reality currently satisfies the first requirement but not the second.
-
----
-
-## Ask the failing Pod why
-
-Find the failing Pod:
-
-```bash
-kubectl get pods -l app=api
-```
-
-Describe it:
-
-```bash
-kubectl describe pod <failing-pod-name>
-```
-
-Go to the **Events** section at the bottom.
-
-You should see messages explaining that Kubernetes could not pull:
+The node is trying to obtain:
 
 ```text
 example/web:v1
 ```
 
-You can also inspect recent cluster events:
+and cannot.
 
-```bash
-kubectl get events \
-  --sort-by=.metadata.creationTimestamp
-```
+The same symptom now has a different root cause.
 
-The Pod status is telling us the symptom:
+## Docker's image store is not the kind node's image store
 
-```text
-ImagePullBackOff
-```
-
-The Events explain the cause.
-
-This is a useful debugging habit:
-
-```text
-get
- |
- v
-find unhealthy object
- |
- v
-describe
- |
- v
-read Events
-```
-
----
-
-## `ErrImagePull` and `ImagePullBackOff`
-
-You may see the Pod alternate between:
-
-```text
-ErrImagePull
-```
-
-and:
-
-```text
-ImagePullBackOff
-```
-
-These describe related stages of the same problem.
-
-Roughly:
-
-```text
-try to obtain image
-       |
-       v
-pull fails
-       |
-       v
-ErrImagePull
-       |
-       v
-wait before retrying
-       |
-       v
-ImagePullBackOff
-       |
-       v
-retry later
-```
-
-The backoff prevents the kubelet from continuously hammering an unavailable registry.
-
-But why is Kubernetes trying to pull the image at all?
-
-We just built it.
-
----
-
-## Your Docker image store is not the Kubernetes node
-
-Check the current context:
+Check the current Kubernetes context:
 
 ```bash
 kubectl config current-context
 ```
 
-For this cookbook's kind cluster it should be:
+For the lab used in this cookbook you may see:
 
 ```text
 kind-ckad
@@ -2176,111 +2048,113 @@ kind-ckad
 
 `kind` means **Kubernetes IN Docker**.
 
-The Kubernetes node itself runs as a container and uses its own container runtime.
+The Kubernetes node itself runs as a container and has its own container runtime.
 
-Our image currently exists here:
+Our image currently exists in the image store used by Docker on the host:
 
 ```text
-Docker on your machine
+host
+ |
+ +-- Docker image store
+ |      |
+ |      +-- example/web:v1
+ |
+ +-- kind node container
         |
-        +-- example/web:v1
+        +-- containerd image store
+               |
+               +-- example/web:v1 is missing
 ```
 
-But the kubelet is running here:
+These are different image stores.
 
-```text
-kind node
-    |
-    v
-container runtime
-```
-
-Those are not the same image store.
-
-Conceptually:
-
-```text
-Mac / Linux host
-|
-+-- Docker image store
-|      |
-|      +-- example/web:v1
-|
-+-- kind node container
-       |
-       +-- containerd image store
-              |
-              +-- image is missing
-```
-
-When the node cannot find the requested image locally, it attempts to obtain it from a registry.
-
-Our image name is:
+When the kubelet asks the node's container runtime to start:
 
 ```text
 example/web:v1
 ```
 
-but we never pushed that image to a registry.
+and the image is not present locally, the runtime attempts to obtain it from a registry according to the Pod's image pull policy.
+
+We built the image locally, but we never pushed it to a registry.
 
 So the pull fails.
 
-This is an important boundary:
+This is the boundary that a happy-path public image hides:
 
-> Building an image successfully does not automatically make that image available to every Kubernetes node.
+> `docker build` succeeding on your workstation does not mean every Kubernetes node can access that image.
 
-In production, image distribution normally looks like:
+In a normal remote or production workflow the path is usually:
 
 ```text
 developer / CI
       |
       v
-docker build
+build image
       |
       v
-container registry
+push to registry
       |
       v
-Kubernetes nodes pull image
+Kubernetes node pulls image
+      |
+      v
+container starts
 ```
 
-For our local kind lab, we can skip running a registry and load the image directly into the node.
-
----
+For our disposable local kind cluster, there is a shortcut.
 
 ## Load the image into kind
 
-Our kind cluster is named `ckad`.
+The context name is normally:
 
-Load the image:
+```text
+kind-<cluster-name>
+```
+
+So for:
+
+```text
+kind-ckad
+```
+
+the kind cluster name is:
+
+```text
+ckad
+```
+
+Load the image into its node:
 
 ```bash
 kind load docker-image example/web:v1 \
   --name ckad
 ```
 
-Now the relationship is:
+Now the path is:
 
 ```text
-Docker image store
-    |
-    | kind load docker-image
-    v
+host Docker image store
+        |
+        | kind load docker-image
+        v
 kind node image store
-    |
-    v
-kubelet can run example/web:v1
+        |
+        v
+kubelet can start example/web:v1
 ```
 
-Kubernetes may eventually retry the failed Pod by itself.
+Kubernetes may recover on its next image-pull retry.
 
-If you want to observe reconciliation immediately, delete the failing Pod:
+If the existing Pod is already backing off and you want to make the next observation immediate, delete only the failing Pod:
 
 ```bash
-kubectl delete pod <failing-pod-name>
+kubectl delete pod <failing-pod>
 ```
 
-Do **not** change the Deployment.
+Do **not** modify the Deployment.
+
+The new ReplicaSet still wants a Pod matching the current template, so deleting the failed Pod causes another one to appear.
 
 Watch:
 
@@ -2288,74 +2162,35 @@ Watch:
 kubectl get pods -l app=api -w
 ```
 
-The ReplicaSet still says that a Pod matching the new template should exist.
+This time the replacement should be able to start from the image now present on the node.
 
-Deleting the failed Pod therefore causes another to be created.
-
-This time the node can find:
-
-```text
-example/web:v1
-```
-
-locally.
-
-The container should start.
-
----
-
-## Watch the rollout recover
-
-Now run:
+## Watch reconciliation continue
 
 ```bash
 kubectl rollout status deployment/api
 ```
 
-You should see the rollout complete.
-
-Inspect everything together:
+Then inspect the whole ownership chain:
 
 ```bash
 kubectl get deployment,rs,pods -l app=api
 ```
 
-Eventually the new ReplicaSet should own all three active Pods and the old ReplicaSet should have zero desired replicas.
+Eventually the old ReplicaSet should be scaled to zero and the new ReplicaSet should own all three running Pods.
 
-Conceptually:
+Notice what we did **not** do:
 
 ```text
-before
-------
-
-old ReplicaSet
-+-- old Pod
-+-- old Pod
-+-- old Pod
-
-new ReplicaSet
-+-- broken Pod
-
-
-after image becomes available
------------------------------
-
-old ReplicaSet
-+-- scaled to zero
-
-new ReplicaSet
-+-- new Pod
-+-- new Pod
-+-- new Pod
+restart Kubernetes
+recreate the Deployment
+manually create three Pods
 ```
 
-The Deployment controller did not need to be restarted.
+The desired state was already correct.
 
-The ReplicaSet did not need to be recreated manually.
+We fixed the external condition preventing the node from satisfying it.
 
-We fixed the condition preventing Kubernetes from satisfying the existing desired state, and reconciliation continued.
-
----
+The existing control loops carried on from there.
 
 ## Prove that our application is running
 
@@ -2365,62 +2200,24 @@ Port-forward the Deployment:
 kubectl port-forward deployment/api 8080:80
 ```
 
-In another terminal:
+From another terminal:
 
 ```bash
 curl http://127.0.0.1:8080
 ```
 
-You should see:
-
-```html
-<!doctype html>
-<html>
-  <body>
-    <h1>Hello from our own image</h1>
-    <p>version: v1</p>
-  </body>
-</html>
-```
-
-We have now travelled through the complete application path:
+You should see HTML containing:
 
 ```text
-source code
-    |
-    v
-Dockerfile
-    |
-    v
-docker build
-    |
-    v
-OCI image
-    |
-    v
-kind load
-    |
-    v
-node image store
-    |
-    v
-Deployment Pod template
-    |
-    v
-new ReplicaSet
-    |
-    v
-new Pods
-    |
-    v
-running application
+Hello from our own image
+version: v1
 ```
 
----
+Press `Ctrl-C` in the port-forward terminal when finished.
 
-## Make a v2
+## Do the workflow correctly with v2
 
-Now that we understand the path, repeat it deliberately.
+Now repeat the process with the order understood.
 
 Change the page:
 
@@ -2436,13 +2233,13 @@ cat > index.html <<'EOF'
 EOF
 ```
 
-Build a **new tag**:
+Build a new image tag:
 
 ```bash
 docker build -t example/web:v2 .
 ```
 
-Load it:
+Make the image available to the kind node **before** requesting it:
 
 ```bash
 kind load docker-image example/web:v2 \
@@ -2456,69 +2253,47 @@ kubectl set image deployment/api \
   nginx=example/web:v2
 ```
 
-Watch:
+Watch the rollout:
 
 ```bash
 kubectl rollout status deployment/api
 ```
 
-Verify:
+The local development loop is now explicit:
+
+```text
+edit source
+    |
+    v
+build image
+    |
+    v
+make image available to nodes
+    |
+    v
+change Deployment spec
+    |
+    v
+controllers reconcile
+    |
+    v
+new Pods become ready
+```
+
+For kind:
 
 ```bash
-kubectl port-forward deployment/api 8080:80
+docker build -t example/web:v2 .
+kind load docker-image example/web:v2 --name ckad
+kubectl set image deployment/api nginx=example/web:v2
+kubectl rollout status deployment/api
 ```
 
-Then from another terminal:
-
-```bash
-curl http://127.0.0.1:8080
-```
-
-You should now see:
-
-```text
-version: v2
-```
-
-Notice the order:
-
-```text
-build
-  |
-  v
-make image available
-  |
-  v
-change desired state
-  |
-  v
-roll out
-```
-
-The first time we accidentally did:
-
-```text
-build
-  |
-  v
-change desired state
-  |
-  v
-Kubernetes cannot obtain image
-  |
-  v
-failed rollout
-```
-
-Both were useful.
-
-The failure exposed a boundary that the successful path would otherwise have hidden.
-
----
+On a real multi-node or remote cluster, the middle step is normally a registry rather than `kind load`.
 
 ## Why use a new image tag?
 
-It is tempting during local development to repeatedly rebuild:
+During local development it is tempting to rebuild the same tag repeatedly:
 
 ```text
 example/web:v1
@@ -2526,9 +2301,7 @@ example/web:v1
 
 with different contents.
 
-Avoid using mutable tags while learning this workflow.
-
-Prefer:
+Prefer immutable or at least unique version tags while learning this workflow:
 
 ```text
 example/web:v1
@@ -2536,99 +2309,100 @@ example/web:v2
 example/web:v3
 ```
 
-Then the image reference itself tells us which version the Deployment requested.
+Then the desired image reference tells you which build Kubernetes was asked to run.
 
-That makes debugging much easier:
+Production systems often go further and deploy immutable image digests.
+
+The important principle is the same:
 
 ```text
-desired image
+know exactly which image desired state refers to
+```
+
+## What the two failures taught us
+
+Both experiments produced an image pull failure.
+
+But the causes were different.
+
+### Failure 1
+
+```text
+requested image
       |
       v
-example/web:v2
-```
-
-rather than having several different images all claiming to be:
-
-```text
-example/web:v1
-```
-
-Production systems often go further and deploy images by immutable digest.
-
-For now, unique version tags are enough to make the important idea clear.
-
----
-
-## What this sidequest taught us
-
-We started by trying to deploy our own web page.
-
-Along the way we encountered several Kubernetes concepts naturally:
-
-```text
-Deployment name != container name != image name
-```
-
-```text
-changing the image
+image does not exist
       |
       v
-changes the Pod template
-      |
-      v
-creates a new ReplicaSet
-      |
-      v
-starts a rolling update
+pull fails
 ```
+
+The fix was to correct desired state:
 
 ```text
-docker build
+kubectl rollout undo
+```
+
+### Failure 2
+
+```text
+requested image
       |
       v
-local image exists
-
-does NOT imply
-
-Kubernetes node can access image
-```
-
-```text
-failed new Pod
+image exists on developer machine
       |
       v
-old healthy Pods remain available
+image absent from Kubernetes node
+      |
+      v
+registry cannot provide it
+      |
+      v
+pull fails
 ```
 
-and:
+The desired state was valid.
+
+The fix was to make the requested artifact available to the node:
 
 ```text
-Pod status
-   +
-Events
-   +
-ownership chain
-   |
-   v
-explain why reconciliation is stuck
+kind load docker-image
 ```
 
-Most importantly, Kubernetes was doing exactly what we asked throughout.
-
-The failure was not that reconciliation stopped.
-
-The controller continued trying to make actual state match desired state.
-
-It simply could not satisfy one of the inputs:
+That distinction is much more useful than memorising:
 
 ```text
-image: example/web:v1
+ImagePullBackOff = image problem
 ```
 
-Once that image became available to the node, the system could converge.
+A better mental model is:
 
-That is the control loop again.
+```text
+status tells you where the system is stuck
+        |
+        v
+Events and object relationships tell you why
+```
 
+And underneath both examples is still the same Kubernetes control loop:
+
+```text
+desired Pod template
+        |
+        v
+controller creates replacement workload
+        |
+        v
+node attempts to realise it
+        |
+        +---- cannot obtain image ----> status + Events expose failure
+        |
+        v
+condition fixed
+        |
+        v
+reconciliation continues
+```
 
 ---
 
@@ -2960,9 +2734,9 @@ We will revisit this after adding readiness probes.
 
 # 13. ConfigMaps: Configuration Without Rebuilding the Image [CKAD]
 
-Our nginx image contains its default page.
+Our current nginx-based image has application content baked into it.
 
-Suppose application content or configuration needs to vary between environments.
+Suppose that content or configuration needs to vary between environments.
 
 Rebuilding an image for every small configuration change is often the wrong abstraction.
 
@@ -4193,40 +3967,303 @@ rm -f daemonset.yaml
 
 # Part VII - Identity, Authorization and Runtime Security
 
-# 23. ServiceAccounts, RBAC and Admission [CKAD]
+# 23. Who Is Allowed to Do What? Users, ServiceAccounts, RBAC and Admission [CKAD] [DEV]
 
-When a human or workload talks to the Kubernetes API, several separate questions are involved.
+Until now we have mostly used `kubectl` as a highly privileged lab administrator.
+
+That is useful for learning, but it hides an important production question:
+
+> Who should be allowed to do what?
+
+There are several separate decisions in the Kubernetes API request path.
 
 ```text
-Authentication
-    -> who are you?
-
-Authorization
-    -> may you perform this action?
-
-Admission
-    -> even if authorized, is this object acceptable and should it be mutated?
+request
+   |
+   v
+authentication
+   |
+   | who are you?
+   v
+authorization
+   |
+   | may that identity perform this action?
+   v
+admission
+   |
+   | for writes: is this object acceptable, or should it be mutated?
+   v
+Kubernetes API state
 ```
 
-Keeping these stages separate avoids a lot of confusion.
+Keeping those stages separate avoids a lot of security confusion.
+
+## Humans and workloads use different kinds of identity
+
+Kubernetes commonly deals with two broad identity types:
+
+```text
+human / external client          workload inside Kubernetes
+          |                                |
+          v                                v
+     User / Group                    ServiceAccount
+          |                                |
+          +---------------+----------------+
+                          |
+                          v
+                         RBAC
+```
+
+A `ServiceAccount` is a Kubernetes API object.
+
+A normal human `User` is not.
+
+Kubernetes does not provide a `User` resource that you create with:
+
+```text
+kubectl create user alice
+```
+
+Instead, human authentication normally comes from something outside the Kubernetes object model, such as:
+
+```text
+client certificate
+OIDC / SSO identity
+cloud IAM integration
+authentication proxy
+```
+
+After authentication, the API server has identity information such as:
+
+```text
+username: alice
+groups:
+  - developers
+```
+
+RBAC then decides what that identity may do.
+
+## Lab: give Alice namespace-scoped developer access
+
+We do not need to configure a real identity provider just to learn authorization.
+
+`kubectl` can ask the API server to evaluate a request as another identity using impersonation.
+
+> `--as=alice` does not create Alice. It asks the API server to evaluate the request as the username `alice`. Your current identity must itself be allowed to impersonate users. The administrator credentials used by our kind lab normally are.
+
+Create a namespace-scoped developer role.
+
+Save as `alice-rbac.yaml`:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: developer
+  namespace: cookbook
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: alice-developer
+  namespace: cookbook
+subjects:
+  - kind: User
+    name: alice
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: developer
+```
+
+Apply it:
+
+```bash
+kubectl apply -f alice-rbac.yaml
+```
+
+Ask whether Alice can read Pods in our namespace:
+
+```bash
+kubectl auth can-i list pods \
+  --as=alice \
+  -n cookbook
+```
+
+Expected:
+
+```text
+yes
+```
+
+Can she change a Deployment?
+
+```bash
+kubectl auth can-i patch deployments \
+  --as=alice \
+  -n cookbook
+```
+
+Expected:
+
+```text
+yes
+```
+
+Can she read Secrets?
+
+```bash
+kubectl auth can-i get secrets \
+  --as=alice \
+  -n cookbook
+```
+
+Expected:
+
+```text
+no
+```
+
+Can she administer another namespace?
+
+```bash
+kubectl auth can-i patch deployments \
+  --as=alice \
+  -n default
+```
+
+Expected:
+
+```text
+no
+```
+
+Can she delete a cluster-scoped Node object?
+
+```bash
+kubectl auth can-i delete nodes \
+  --as=alice
+```
+
+Expected:
+
+```text
+no
+```
+
+This is the permission boundary we wanted:
+
+```text
+Alice
+  |
+  v
+Kubernetes API
+  |
+  +-- read Pods in cookbook             yes
+  +-- change Deployments in cookbook    yes
+  +-- read Secrets in cookbook          no
+  +-- change Deployments in default     no
+  +-- delete Nodes                       no
+```
+
+You can ask for a broader view of the permissions Kubernetes calculates:
+
+```bash
+kubectl auth can-i --list \
+  --as=alice \
+  -n cookbook
+```
+
+## RBAC permissions are additive
+
+Kubernetes RBAC grants permissions.
+
+It does not contain explicit `deny` rules.
+
+Think:
+
+```text
+matching allow rule exists
+        -> allowed
+
+no matching allow rule
+        -> not allowed
+```
+
+That means you need to consider **all** RoleBindings and ClusterRoleBindings attached to an identity.
+
+A narrow RoleBinding does not protect Alice if some other binding also gives her broad cluster permissions.
+
+## A permission can have indirect effects
+
+Alice cannot directly create Pods with the Role above.
+
+Check:
+
+```bash
+kubectl auth can-i create pods \
+  --as=alice \
+  -n cookbook
+```
+
+Expected:
+
+```text
+no
+```
+
+But Alice *can* create a Deployment.
+
+A Deployment controller can then create ReplicaSets and Pods on her behalf.
+
+```text
+Alice
+  |
+  | create Deployment allowed
+  v
+Deployment
+  |
+  v
+Deployment controller
+  |
+  v
+ReplicaSet
+  |
+  v
+Pods
+```
+
+Authorization is evaluated against the API request Alice makes.
+
+You therefore need to reason about what a permitted object can cause controllers to do, not merely about the object's name.
+
+This becomes particularly important with powerful workload features such as privileged containers, host mounts and scheduling controls.
 
 ## ServiceAccount: workload identity
 
-A ServiceAccount represents an identity for workloads inside Kubernetes.
+Now do the same exercise for an application rather than a human.
 
-Create one:
+Create a ServiceAccount:
 
 ```bash
 kubectl create serviceaccount api-sa
 ```
 
-Inspect:
+Inspect it:
 
 ```bash
 kubectl get serviceaccount api-sa -o yaml
 ```
 
-Modern Kubernetes uses short-lived projected ServiceAccount credentials rather than relying on automatically created permanent token Secrets.
+Modern Kubernetes normally gives Pods short-lived projected ServiceAccount credentials rather than relying on automatically created permanent token Secrets.
 
 Request a temporary token when the cluster allows it:
 
@@ -4259,17 +4296,16 @@ Expected:
 api-sa
 ```
 
-## RBAC: authorize actions
+Give that workload identity read-only Pod access.
 
-Create a Role that can read Pods.
-
-Save as `rbac.yaml`:
+Save as `workload-rbac.yaml`:
 
 ```yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: pod-reader
+  namespace: cookbook
 rules:
   - apiGroups: [""]
     resources: ["pods"]
@@ -4279,6 +4315,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: api-sa-pod-reader
+  namespace: cookbook
 subjects:
   - kind: ServiceAccount
     name: api-sa
@@ -4292,27 +4329,29 @@ roleRef:
 Apply:
 
 ```bash
-kubectl apply -f rbac.yaml
+kubectl apply -f workload-rbac.yaml
 ```
 
-Ask Kubernetes whether that identity may list Pods:
+Ask whether that identity may list Pods:
 
 ```bash
 kubectl auth can-i list pods \
-  --as=system:serviceaccount:cookbook:api-sa
+  --as=system:serviceaccount:cookbook:api-sa \
+  -n cookbook
 ```
 
-Expected on a lab where your current identity is allowed to impersonate:
+Expected:
 
 ```text
 yes
 ```
 
-Ask whether it may delete Pods:
+Ask whether it may delete them:
 
 ```bash
 kubectl auth can-i delete pods \
-  --as=system:serviceaccount:cookbook:api-sa
+  --as=system:serviceaccount:cookbook:api-sa \
+  -n cookbook
 ```
 
 Expected:
@@ -4321,46 +4360,238 @@ Expected:
 no
 ```
 
-RBAC objects connect like this:
+Human and workload authorization now look almost identical after authentication:
 
 ```text
-ServiceAccount
-      |
-      v
-RoleBinding
-      |
-      v
-Role
-      |
-      v
-allowed API verbs/resources
+User/alice --------------------+
+                               |
+ServiceAccount/api-sa ---------+
+                               |
+                               v
+                              RBAC
+                               |
+                         allowed verbs
+                         on resources
+                         in a scope
 ```
 
-## Role vs ClusterRole
+## Role, ClusterRole, RoleBinding and ClusterRoleBinding
 
-A `Role` contains namespaced permissions.
+RBAC has four main API objects.
 
-A `ClusterRole` can contain cluster-wide permissions and can also be bound within a namespace.
+```text
+Role
+  -> permission rules defined for one namespace
+
+ClusterRole
+  -> reusable permission rules
+  -> can also describe cluster-scoped resources
+
+RoleBinding
+  -> grants a Role or ClusterRole inside one namespace
+
+ClusterRoleBinding
+  -> grants a ClusterRole across the cluster
+```
+
+A useful relationship is:
+
+```text
+subject
+  |
+  | User / Group / ServiceAccount
+  v
+binding
+  |
+  v
+role containing rules
+  |
+  v
+verbs + resources
+```
+
+For example:
+
+```text
+alice
+  |
+  v
+RoleBinding/cookbook
+  |
+  v
+Role/developer
+  |
+  +-- get/list/watch Pods
+  +-- create/update/patch Deployments
+```
+
+Be especially careful with `ClusterRoleBinding`.
+
+This:
+
+```text
+Alice can administer one namespace
+```
+
+and this:
+
+```text
+Alice can administer the whole cluster
+```
+
+can differ by only the binding used.
+
+## A namespace is a scope, not an automatic security boundary
+
+Namespaces are extremely useful administrative boundaries.
+
+But merely placing two teams in different namespaces does not automatically isolate them.
+
+```text
+namespace alone
+    !=
+permission boundary
+```
+
+You normally combine namespaces with controls such as:
+
+```text
+RBAC
+ResourceQuota / LimitRange
+NetworkPolicy
+Pod security / admission policy
+storage policy
+```
+
+The exact isolation you need depends on whether the tenants trust one another.
+
+## API permission, workload placement and machine access are different controls
+
+This distinction matters particularly around control-plane nodes.
+
+There are at least three independent questions:
+
+```text
+1. API authorization
+   "Can Alice delete or modify this Node object?"
+
+2. workload placement
+   "Can this Pod be scheduled onto this node?"
+
+3. machine access
+   "Can Alice SSH into or otherwise administer the actual host?"
+```
+
+They are enforced by different layers:
+
+```text
+                         control-plane machine
+                                  |
+          +-----------------------+-----------------------+
+          |                       |                       |
+          v                       v                       v
+   Kubernetes API            scheduler target          Linux / VM / metal
+          |                       |                       |
+         RBAC              taints / tolerations       IAM / SSH / firewall
+                          affinity / selectors        OS permissions
+```
+
+For example, control-plane nodes are commonly tainted so ordinary workloads do not schedule there:
+
+```text
+node-role.kubernetes.io/control-plane:NoSchedule
+```
+
+That is a **scheduling control**.
+
+It is not the same thing as denying API access to Node objects, and it is not the same thing as denying SSH access to the machine.
+
+It is also not, by itself, a strong tenant security boundary: a workload that is allowed to specify a matching toleration can become eligible for the node.
 
 Likewise:
 
-```text
-RoleBinding        -> binding scoped to a namespace
-ClusterRoleBinding -> binding across the cluster
+```bash
+kubectl auth can-i delete nodes --as=alice
 ```
 
-For CKAD, the key is being able to read and construct the relationship rather than memorising every possible API verb.
+answers an API authorization question.
+
+It tells you nothing about whether Alice has infrastructure credentials for the underlying VM or bare-metal host.
+
+## What about the kubelet itself? [DEV] [DEEP DIVE]
+
+Nodes are API clients too.
+
+A kubelet commonly authenticates with an identity resembling:
+
+```text
+system:node:worker-01
+```
+
+Kubernetes has a special-purpose **Node authorizer** that can constrain kubelet API access based on the Pods assigned to that node.
+
+The **NodeRestriction** admission plugin adds additional restrictions around what kubelets may modify.
+
+Conceptually:
+
+```text
+human / application identities
+        -> RBAC
+
+kubelet node identities
+        -> Node authorizer
+        -> NodeRestriction admission
+```
+
+You do not need to configure these for CKAD, but knowing that node identity has its own authorization path prevents the misleading idea that every Kubernetes permission problem is just a RoleBinding.
+
+## RBAC is not the same thing as multi-tenancy [DEV] [DEEP DIVE]
+
+RBAC can give multiple teams restricted access to one Kubernetes API:
+
+```text
+Alice ----+
+          |
+Bob ------+--> one kube-apiserver
+          |        |
+          |       RBAC
+          |        |
+          +--> namespace-scoped views
+```
+
+That can be entirely appropriate for trusted teams.
+
+But stronger tenancy may instead give each tenant its own Kubernetes API/control-plane boundary:
+
+```text
+Alice ---> tenant A API
+
+Bob -----> tenant B API
+
+                |
+                v
+        provider infrastructure
+```
+
+Projects such as **vCluster** and **Kamaji** operate in this design space, although they implement it differently.
+
+RBAC still exists inside each tenant cluster. The difference is that the tenant boundary no longer depends only on permissions inside one shared API server.
+
+The companion `multitenancy-appendix.md` continues this model and compares shared-cluster RBAC, vCluster and Kamaji without turning the CKAD path into a platform-engineering course.
 
 ## Admission control
 
-After authentication and authorization, admission controllers can validate or mutate an API request.
+Authorization is not necessarily the final decision for a write request.
 
-Examples of things that may be enforced through admission include:
+After authentication and authorization, admission can validate or mutate an incoming object before it is persisted.
+
+Examples include:
 
 - Pod security requirements
 - quotas
 - policy rules
-- injected defaults or sidecars in some platforms
+- injected defaults
+- validating or mutating webhooks
 
 This explains a useful failure class:
 
@@ -4371,19 +4602,47 @@ I am authenticated
 I am authorized
       |
       v
-API request still rejected
+write request still rejected
       |
       v
 check admission or policy error
 ```
 
-Cleanup only the RBAC lab objects, but keep the ServiceAccount because the Deployment currently uses it:
+One subtle distinction: normal read operations such as `get`, `list` and `watch` do not pass through admission control in the same way write requests do.
 
-```bash
-kubectl delete -f rbac.yaml
-rm -f rbac.yaml
+## The permission model to keep
+
+When something is denied, ask which boundary you are actually debugging:
+
+```text
+Who am I?
+  -> authentication
+
+May I make this API request?
+  -> authorization / RBAC
+
+Is this write acceptable?
+  -> admission
+
+May this workload land on that node?
+  -> scheduling controls
+
+May this workload talk to another workload?
+  -> NetworkPolicy / network controls
+
+May this person administer the actual machine?
+  -> infrastructure IAM / SSH / OS controls
 ```
 
+Those controls cooperate, but they are not substitutes for one another.
+
+Cleanup the lab RBAC objects, but keep the ServiceAccount because the Deployment currently uses it:
+
+```bash
+kubectl delete -f alice-rbac.yaml
+kubectl delete -f workload-rbac.yaml
+rm -f alice-rbac.yaml workload-rbac.yaml
+```
 ---
 
 # 24. SecurityContext and Container Privilege [CKAD]
@@ -6289,6 +6548,32 @@ Configuration:
 ```text
 Pod spec -> referenced object -> key -> mount/env -> application
 ```
+
+## Security boundaries answer different questions
+
+```text
+authentication
+    -> who are you?
+
+authorization / RBAC
+    -> may you make this API request?
+
+admission
+    -> is this write acceptable?
+
+scheduling controls
+    -> where may this workload run?
+
+NetworkPolicy
+    -> which network flows are allowed?
+
+infrastructure IAM / SSH
+    -> who may administer the actual machines?
+```
+
+Namespaces help provide scope, but are not an automatic security boundary by themselves.
+
+For stronger tenancy, separate tenant Kubernetes APIs/control planes can add another boundary; see `multitenancy-appendix.md`.
 
 ## Kubernetes extension uses the same model
 

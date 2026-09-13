@@ -1,10 +1,19 @@
 /**
- * Turns the source cookbook markdown in content/ into
- *   - one markdown file per chapter in src/content/chapters/
- *   - a generated metadata module at src/data/course.ts
+ * Transforms content/ into the course.
  *
- * Run with `npm run content` after editing anything in content/.
- * Nothing here is hand-maintained; edit the markdown, not the output.
+ * The pipeline is two scripts with one job each, and only the first touches
+ * the network:
+ *
+ *   sync-content.mjs   gist  ->  content/     mirrors the author's markdown
+ *   build-content.mjs  content/ -> src/       derives everything the UI needs
+ *
+ * Output, all of it generated and none of it hand-maintained:
+ *   src/content/chapters/<id>.md   one file per H1 section, lazy-loaded
+ *   src/data/course.ts             metadata, totals and the course preamble
+ *
+ * Documents are discovered by reading the directory and classified by what
+ * they contain — see `classify` — never by filename, which is not ours to
+ * control. Edit the markdown, not the output.
  */
 import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -14,48 +23,35 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const SRC = join(root, 'content')
 const OUT_CHAPTERS = join(root, 'src/content/chapters')
 const OUT_DATA = join(root, 'src/data/course.ts')
-const OUT_PREAMBLE = join(root, 'src/content/preamble.md')
 
-/** Reading order of the whole course. */
-const SOURCES = [
-  {
-    key: 'kind',
-    file: 'kind-quickstart.md',
-    titleIsChapter: true,
-    firstTitle: 'Run Kubernetes locally with kind',
-    part: {
-      title: 'Getting a cluster',
-      numeral: '0',
-      volume: 'Supplemental',
-      blurb: 'A disposable Kubernetes lab on your own machine, so every later chapter has somewhere to run.',
-    },
-  },
-  { key: 'ck', file: 'k8s-cheatsheet.md', autoParts: true, preamble: true },
-  {
-    key: 'c',
-    file: 'kubeadm-appendix.md',
-    titleIsChapter: true,
-    part: {
-      title: 'Appendix C — Kubernetes from parts',
-      numeral: 'C',
-      volume: 'CKA territory',
-      blurb:
-        'Build a cluster by hand with kubeadm, containerd and Cilium. Watch it not work yet, and find out why.',
-    },
-  },
-  {
-    key: 'd',
-    file: 'cillium-gateay-appendix.md',
-    titleIsChapter: true,
-    part: {
-      title: 'Appendix D — Cilium, eBPF and Gateway API',
-      numeral: 'D',
-      volume: 'Platform',
-      blurb:
-        'Follow a request from an HTTPRoute all the way down to eBPF, then observe it with Hubble.',
-    },
-  },
-]
+/**
+ * Id prefixes, pinned only so that URLs already in the wild and progress
+ * already saved in someone's cookie keep working. A new document does not
+ * need an entry; it gets initials derived from its filename.
+ */
+const PINNED_KEYS = {
+  'kind-quickstart.md': 'kind',
+  'k8s-cheatsheet.md': 'ck',
+  'kubeadm-appendix.md': 'c',
+  'cillium-gateay-appendix.md': 'd',
+}
+
+const VOLUMES = ['Supplemental', 'The cookbook', 'Beyond the exam']
+
+const NOISE = /^(appendix|appendices|quickstart|cheatsheet|md|the|and|for|a|an)$/i
+
+function deriveKey(filename, taken) {
+  const words = filename
+    .replace(/\.md$/, '')
+    .split(/[^A-Za-z0-9]+/)
+    .filter((w) => w && !NOISE.test(w))
+  let key = (words.map((w) => w[0]).join('') || filename.slice(0, 3)).toLowerCase()
+  let n = 2
+  const base = key
+  while (taken.has(key)) key = `${base}${n++}`
+  taken.add(key)
+  return key
+}
 
 const slug = (s) =>
   s
@@ -144,7 +140,8 @@ function paragraphs(body) {
   return out.map((p) =>
     p
       .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
-      .replace(/[`*_]/g, '')
+      .replace(/[`*]/g, '')
+      // leave `_` alone: it is far more often ip_forward than emphasis
       .trim(),
   )
 }
@@ -169,6 +166,37 @@ function firstParagraph(body) {
   return text
 }
 
+/**
+ * The cookbook's own preamble states its purpose, its target version, what the
+ * `[CKAD]` markers mean, and draws the teaching loop the whole book follows.
+ * Pull those out so the landing page quotes the author rather than a copy of
+ * him that silently goes stale the next time he edits the gist.
+ */
+function readPreamble(body) {
+  const prose = paragraphs(body)
+
+  const target = body.match(/^\*\*Target:\*\*\s*(.+)$/m)?.[1]?.trim() ?? null
+
+  const legend = [...body.matchAll(/^-\s*\*\*\[([A-Z ]+)\]\*\*\s*[-–—]\s*(.+)$/gm)].map(
+    ([, tag, meaning]) => ({
+      tag,
+      // list items in the source, sentences on the page
+      meaning: `${meaning.trim().charAt(0).toUpperCase()}${meaning.trim().slice(1).replace(/\.$/, '')}.`,
+    }),
+  )
+
+  // the first drawn block is the teaching loop
+  const diagram = body.match(/^```\w*\n([\s\S]*?)^```/m)?.[1]?.replace(/\n$/, '') ?? null
+
+  return {
+    // the opening statement of intent, before the bookkeeping starts
+    intro: prose.filter((p) => !p.startsWith('Target:')).slice(0, 3).join(' '),
+    target,
+    legend,
+    diagram,
+  }
+}
+
 function subheadings(body) {
   const out = []
   let fenced = false
@@ -185,12 +213,49 @@ function subheadings(body) {
 }
 
 function measure(body) {
-  const fences = [...body.matchAll(/^```(\w*)\n([\s\S]*?)^```/gm)]
-  const runnable = fences.filter((f) => ['bash', 'powershell'].includes(f[1])).length
+  const runnable = [...body.matchAll(/^```(\w*)$/gm)].filter((f) =>
+    ['bash', 'powershell'].includes(f[1]),
+  ).length
   const prose = body.replace(/^```[\s\S]*?^```/gm, '')
   const words = prose.split(/\s+/).filter(Boolean).length
   const minutes = Math.max(2, Math.round(words / 180 + runnable * 1.1))
-  return { minutes, runnable, hasYaml: fences.some((f) => f[1] === 'yaml') }
+  return { minutes, runnable }
+}
+
+/**
+ * What kind of document is this? Decided from its own headings.
+ *  - it contains `# Part ...`            -> the core cookbook
+ *  - it opens "Supplemental - ..."       -> front matter, runs first
+ *  - it opens "Appendix X - ..."         -> runs after the cookbook, in letter order
+ *  - anything else                       -> runs last, alphabetically
+ */
+function classify(sections) {
+  const head = takeTags(sections[0].heading).title
+
+  if (sections.some((s) => /^Part\s+[IVXLC]+\b/.test(takeTags(s.heading).title))) {
+    return { rank: 1, role: 'cookbook', title: head, letter: null }
+  }
+
+  const supplemental = head.match(/^Supplementa(?:l|ry)\s*[-–—:]\s*(.*)$/i)
+  if (supplemental) {
+    return { rank: 0, role: 'document', title: supplemental[1], letter: '0' }
+  }
+
+  const appendix = head.match(/^Appendix\s*([A-Z])?\s*[-–—:]\s*(.*)$/i)
+  if (appendix) {
+    return { rank: 2, role: 'document', title: appendix[2], letter: appendix[1] ?? null }
+  }
+
+  return { rank: 3, role: 'document', title: head, letter: null }
+}
+
+/** Give unlettered appendices the next free letter, for a scannable rail. */
+function assignLetters(documents) {
+  const used = documents.map((d) => d.letter).filter((l) => l && /^[A-Z]$/.test(l))
+  let next = Math.max(...used.map((l) => l.charCodeAt(0)), 'A'.charCodeAt(0) - 1) + 1
+  for (const doc of documents) {
+    if (doc.rank >= 2 && !doc.letter) doc.letter = String.fromCharCode(next++)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -198,15 +263,36 @@ function measure(body) {
 rmSync(OUT_CHAPTERS, { recursive: true, force: true })
 mkdirSync(OUT_CHAPTERS, { recursive: true })
 
+// Discover every document, then let each one say where it belongs.
+const documents = readdirSync(SRC)
+  .filter((f) => f.endsWith('.md'))
+  .sort()
+  .map((file) => {
+    const sections = splitH1(readFileSync(join(SRC, file), 'utf8'))
+    if (!sections.length) throw new Error(`no H1 sections in ${file}`)
+    return { file, sections, ...classify(sections) }
+  })
+
+documents.sort(
+  (a, b) => a.rank - b.rank || (a.letter ?? 'ZZ').localeCompare(b.letter ?? 'ZZ') || a.title.localeCompare(b.title),
+)
+assignLetters(documents)
+
+const keys = new Set()
+for (const doc of documents) {
+  doc.key = PINNED_KEYS[doc.file] ?? null
+  if (doc.key) keys.add(doc.key)
+}
+for (const doc of documents) {
+  if (!doc.key) doc.key = deriveKey(doc.file, keys)
+}
+
 const parts = []
 let preamble = ''
 const seen = new Set()
 
-for (const source of SOURCES) {
-  const raw = readFileSync(join(SRC, source.file), 'utf8')
-  const sections = splitH1(raw)
-  if (!sections.length) throw new Error(`no H1 sections in ${source.file}`)
-
+for (const doc of documents) {
+  const { sections, key } = doc
   let part = null
   const openPart = (meta) => {
     part = { id: `part-${slug(meta.title)}`, chapters: [], ...meta }
@@ -217,24 +303,31 @@ for (const source of SOURCES) {
   let start = 0
   const head = sections[0]
 
-  if (source.preamble) {
+  if (doc.role === 'cookbook') {
     preamble = tidy(head.body)
     start = 1
-  } else if (source.titleIsChapter) {
-    openPart({ ...source.part, volume: source.part.volume })
+  } else {
+    // The document's own title becomes the part; its opening section becomes
+    // that part's first chapter, so nothing in the source is dropped.
+    openPart({
+      title: doc.title,
+      numeral: doc.letter,
+      volume: VOLUMES[Math.min(doc.rank, VOLUMES.length - 1)],
+      blurb: firstParagraph(tidy(head.body)),
+    })
   }
 
   for (let i = start; i < sections.length; i++) {
     const section = sections[i]
     const stripped = takeTags(section.heading)
 
-    if (source.autoParts) {
+    if (doc.role === 'cookbook') {
       const pm = stripped.title.match(/^Part\s+([IVXLC]+)\s*[-–—]\s*(.*)$/)
       if (pm) {
         openPart({
           title: pm[2],
           numeral: pm[1],
-          volume: 'The cookbook',
+          volume: VOLUMES[1],
           blurb: firstParagraph(tidy(section.body)),
         })
         continue
@@ -243,42 +336,64 @@ for (const source of SOURCES) {
         openPart({
           title: 'Appendices',
           numeral: 'A',
-          volume: 'The cookbook',
+          volume: VOLUMES[1],
           blurb: 'The models worth carrying out of the cookbook, and where they sit on the exam.',
         })
       }
     }
 
-    if (!part) openPart({ ...source.part })
+    // only reached if a document has content before its first `# Part`
+    if (!part) {
+      openPart({
+        title: doc.title,
+        numeral: doc.letter,
+        volume: VOLUMES[Math.min(doc.rank, VOLUMES.length - 1)],
+        blurb: '',
+      })
+    }
 
+    // The opening section is the document's introduction; the part heading
+    // already carries its real name, so do not repeat it.
+    const isHead = i === 0
     let { number, title } = takeNumber(stripped.title)
-    if (i === start && source.firstTitle) title = source.firstTitle
-    const body = tidy(section.body)
-    const { minutes, runnable, hasYaml } = measure(body)
+    // The id stays keyed to the document's real name — it is the URL, and it
+    // is in people's cookies — even though the heading reads "Introduction".
+    let idBasis = title
+    if (isHead) {
+      number = null
+      title = 'Introduction'
+      idBasis = doc.title
+    }
 
-    let id = `${source.key}-${slug(title)}`
-    if (seen.has(id) && number) id = `${source.key}-${slug(`${number} ${title}`)}`
+    const body = tidy(section.body)
+    const { minutes, runnable } = measure(body)
+
+    let id = `${key}-${slug(idBasis)}`
+    if (seen.has(id) && number) id = `${key}-${slug(`${number} ${idBasis}`)}`
     while (seen.has(id)) id = `${id}-x`
     seen.add(id)
 
     writeFileSync(join(OUT_CHAPTERS, `${id}.md`), `${body}\n`)
+
+    // The part heading already shows this document's opening line; no need
+    // for its Introduction chapter to repeat it verbatim underneath.
+    const blurb = firstParagraph(body)
 
     part.chapters.push({
       id,
       number,
       title,
       tags: stripped.tags,
-      blurb: firstParagraph(body),
+      blurb: isHead && blurb === part.blurb ? '' : blurb,
       minutes,
       kind: runnable > 0 ? 'lab' : 'brief',
       commands: runnable,
-      hasYaml,
       sections: subheadings(body),
     })
   }
 }
 
-writeFileSync(OUT_PREAMBLE, `${preamble}\n`)
+const intro = readPreamble(preamble)
 
 const esc = (s) => JSON.stringify(s)
 
@@ -301,7 +416,6 @@ ${p.chapters
         minutes: ${c.minutes},
         kind: ${esc(c.kind)},
         commands: ${c.commands},
-        hasYaml: ${c.hasYaml},
         sections: [${c.sections.map((s) => `{ id: ${esc(s.id)}, title: ${esc(s.title)} }`).join(', ')}],
       },`,
   )
@@ -334,7 +448,6 @@ export type Chapter = {
   kind: ChapterKind
   /** how many runnable command blocks the chapter contains */
   commands: number
-  hasYaml: boolean
   sections: Section[]
 }
 
@@ -351,8 +464,8 @@ export const parts: Part[] = [
 ${partsLiteral}
 ]
 
-export const flatChapters = parts.flatMap((part, partIndex) =>
-  part.chapters.map((chapter, indexInPart) => ({ ...chapter, part, partIndex, indexInPart })),
+export const flatChapters = parts.flatMap((part) =>
+  part.chapters.map((chapter) => ({ ...chapter, part })),
 )
 
 export type FlatChapter = (typeof flatChapters)[number]
@@ -373,8 +486,6 @@ export function neighbours(id: string) {
   }
 }
 
-export const volumes = [...new Set(parts.map((p) => p.volume))]
-
 export const totals = {
   parts: parts.length,
   chapters: flatChapters.length,
@@ -390,10 +501,31 @@ export function formatDuration(minutes: number) {
   if (!m) return \`\${h} hr\`
   return \`\${h} hr \${m} min\`
 }
+
+/**
+ * Lifted from the cookbook's own preamble so the landing page quotes the
+ * author rather than a copy of him.
+ */
+export const intro = {
+  statement: ${esc(intro.intro)},
+  target: ${intro.target ? esc(intro.target) : 'null'},
+  /** short form for the hero flag, e.g. "Kubernetes 1.35" */
+  version: ${esc(intro.target?.match(/Kubernetes\s+[\d.]+/)?.[0] ?? 'Kubernetes')},
+  legend: [
+${intro.legend.map((l) => `    { tag: ${esc(l.tag)}, meaning: ${esc(l.meaning)} },`).join('\n')}
+  ] as { tag: Tag; meaning: string }[],
+  /** the recurring teaching loop, drawn by the author */
+  diagram: ${intro.diagram ? esc(intro.diagram) : 'null'},
+}
 `,
 )
 
-const counts = parts.map((p) => `  ${p.volume} / ${p.title}: ${p.chapters.length}`).join('\n')
+const chapters = readdirSync(OUT_CHAPTERS).length
+const minutes = parts.flatMap((p) => p.chapters).reduce((sum, c) => sum + c.minutes, 0)
 console.log(
-  `wrote ${readdirSync(OUT_CHAPTERS).length} chapters across ${parts.length} parts\n${counts}`,
+  `${documents.length} documents -> ${chapters} chapters, ${parts.length} parts, ` +
+    `${Math.floor(minutes / 60)}h ${minutes % 60}m`,
 )
+for (const doc of documents) {
+  console.log(`  ${(doc.letter ?? '-').padStart(2)}  ${doc.key.padEnd(5)} ${doc.file}`)
+}

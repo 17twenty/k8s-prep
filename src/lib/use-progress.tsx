@@ -32,11 +32,24 @@ type ProgressApi = {
 
 const Ctx = createContext<ProgressApi | null>(null)
 
+/**
+ * Drop completions for chapters that no longer exist. The source cookbook is
+ * edited upstream, so a chapter can be renamed or merged away between visits;
+ * without this the cookie only ever grows.
+ */
+function prune(progress: Progress): Progress {
+  const known = new Set(flatChapters.map((c) => c.id))
+  const done = progress.done.filter((id) => known.has(id))
+  const at = progress.at && known.has(progress.at) ? progress.at : null
+  if (done.length === progress.done.length && at === progress.at) return progress
+  return { ...progress, done, at }
+}
+
 export function ProgressProvider({ children }: { children: ReactNode }) {
   // Read straight out of the cookie during the first render. Doing this in an
   // effect instead loses writes: child effects run before the parent's, so a
   // chapter's `visit` would land and then be overwritten by hydration.
-  const [progress, setProgress] = useState<Progress>(loadProgress)
+  const [progress, setProgress] = useState<Progress>(() => prune(loadProgress()))
   const firstRender = useRef(true)
 
   // Persist as a side effect rather than inside the state updater, so React's

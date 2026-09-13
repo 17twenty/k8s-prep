@@ -1,6 +1,6 @@
-Our nginx image contains its default page.
+Our current nginx-based image has application content baked into it.
 
-Suppose application content or configuration needs to vary between environments.
+Suppose that content or configuration needs to vary between environments.
 
 Rebuilding an image for every small configuration change is often the wrong abstraction.
 

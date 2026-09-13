@@ -118,3 +118,66 @@ grows/shrinks when parts expand, which a container-only ResizeObserver misses.
 Verified: 0px scrollbar gutter, no scrollbar pixels at the rail edge, deep chapter
 (D.25) auto-revealed, chevron retires at bottom, works in the mobile Sheet, and
 reduced-motion gets an instant jump instead of a smooth scroll.
+- 2026-09-13T13:55:02+10:00 ## k8s-prep — content discovery is filename-free (gist can gain/lose documents)
+
+`npm run sync` (`scripts/sync-content.mjs`) hits the **gist API**
+(`api.github.com/gists/$GIST_ID`, default `197ed2df9dd7ed63b897464674519b1a`,
+override via env; `GITHUB_TOKEN` for rate limits) and mirrors every `*.md` into
+`content/` — adding new files, updating changed ones, deleting orphans. Always fetch
+`raw_url`, never `file.content` (truncated for big files). `--dry` previews.
+Build does NOT run sync (no network in build).
+
+`scripts/build-content.mjs` **discovers** `content/*.md` and classifies each document
+by its own headings, not its filename:
+- contains `# Part [IVX]+ - ...` → the core cookbook (rank 1, preamble + auto parts)
+- opens `# Supplemental - ...`   → rank 0
+- opens `# Appendix X - ...`     → rank 2, ordered by letter
+- opens `# Appendix - ...` (no letter) → rank 2, **auto-assigned the next free letter**
+- otherwise → rank 3, alphabetical
+
+Volumes collapsed to three: `Supplemental` / `The cookbook` / `Beyond the exam`
+(was five bespoke labels; appendices now share one volume so new ones just slot in).
+A document's title becomes the **part**; its opening section becomes that part's first
+chapter titled **"Introduction"** — but the chapter **id stays keyed to the document
+title** (`idBasis`), because the id is the URL and is in users' cookies.
+
+`PINNED_KEYS` is the only place filenames appear — it pins id prefixes
+(`kind-`, `ck-`, `c-`, `d-`) for URL/progress stability. New docs need no entry;
+`deriveKey()` makes initials from the filename (`multi-tenancy.md` → `mt`).
+
+`prune()` in `use-progress.tsx` drops completions for ids that no longer exist —
+the upstream cookbook gets edited, so chapters get renamed/merged and the cookie
+would otherwise only grow.
+
+Sept 2026 sync: gained `multi-tenancy.md` (→ Appendix **E**, key `mt`, 12 chapters);
+cookbook 9a merged into 9 and ch23 retitled. 122 → 134 chapters, 13 hr 22 min.
+Only 2 ids moved, both genuine upstream renames.
+- 2026-09-13T14:01:32+10:00 ## k8s-prep — the two content scripts have one job each (keep it that way)
+
+```
+gist --[ sync-content.mjs ]--> content/ --[ build-content.mjs ]--> src/
+```
+`sync` = network mirror only, no parsing. `build` = derivation only, no network.
+`npm run build` runs `content` but NOT `sync`, on purpose: a build must not depend
+on GitHub being reachable.
+
+### Review (Sept 2026) — findings worth not regressing
+- **`src/content/preamble.md` was dead output**: generated every build, imported by
+  nothing, while `overview.tsx` hand-copied four things out of it (lede, "Kubernetes
+  1.35", the `[CKAD]` legend, 20 lines of teaching-loop ASCII). All would drift on the
+  next gist edit. Fixed: `readPreamble()` extracts `intro = { statement, target,
+  version, legend, diagram }` into `course.ts`; `preamble.md` no longer written.
+  **If you add landing-page copy that exists in the source, extract it — don't retype it.**
+- Removed genuinely unused generated fields: `hasYaml` (135 entries), `volumes`
+  export, `indexInPart`/`partIndex` on flatChapters. Only these are consumed:
+  `parts`, `flatChapters`, `getChapter`, `neighbours`, `totals`, `formatDuration`,
+  `intro`, types `Part`/`Tag`.
+- `paragraphs()` used to strip `_` as emphasis, corrupting identifiers like
+  `ip_forward` in blurbs. Now strips only `` ` `` and `*`.
+- Head chapters ("Introduction") were repeating their part's blurb verbatim; now
+  blanked when identical.
+- Hardcoded "Two appendices go past the exam" was already wrong after Appendix E
+  landed — now derived from `parts.filter(p => p.volume === 'Beyond the exam')`.
+
+Still hand-written editorial (acceptable, but it can drift): the four "Before you
+cast off" prerequisite cards in `overview.tsx`.

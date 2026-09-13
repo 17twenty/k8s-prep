@@ -4,7 +4,7 @@ import { Link } from 'react-router'
 import { AppShell, Flag, Sounding } from '@/components/app-shell'
 import { CompassRose, DepthContours } from '@/components/chart-marks'
 import { FigureBlock } from '@/components/code'
-import { flatChapters, formatDuration, getChapter, parts, totals, type Tag } from '@/data/course'
+import { flatChapters, formatDuration, getChapter, intro, parts, totals, type Tag } from '@/data/course'
 import { useProgress } from '@/lib/use-progress'
 
 const tagTone: Record<Tag, 'kilo' | 'signal' | 'quiet'> = {
@@ -13,41 +13,12 @@ const tagTone: Record<Tag, 'kilo' | 'signal' | 'quiet'> = {
   'DEEP DIVE': 'signal',
 }
 
-const tagMeaning: [Tag, string][] = [
-  ['CKAD', 'Directly relevant to the exam.'],
-  ['DEV', 'Practical application developer knowledge.'],
-  ['DEEP DIVE', 'Controllers, operators and platform engineering.'],
-]
-
-/** The spine of the whole cookbook, quoted from its own preamble. */
-const TEACHING_LOOP = `problem
-  |
-  v
-mental model
-  |
-  v
-small experiment
-  |
-  v
-observe Kubernetes
-  |
-  v
-change one thing
-  |
-  v
-observe the consequence
-  |
-  v
-break an assumption
-  |
-  v
-explain why`
-
 export function Overview() {
   const { started, resumeId, doneCount, total, fraction, minutesLeft, isDone, reset } = useProgress()
   const resume = getChapter(resumeId)
   const first = flatChapters[0]
   const ckadCount = flatChapters.filter((c) => c.tags.includes('CKAD')).length
+  const beyond = parts.filter((p) => p.volume === 'Beyond the exam')
 
   return (
     <AppShell breadcrumb={[{ label: 'Kubernetes for Devs' }, { label: 'Overview' }]}>
@@ -62,7 +33,7 @@ export function Overview() {
         <div className="relative mx-auto max-w-6xl px-6 pt-16 pb-14 sm:px-10 sm:pt-24 sm:pb-20">
           <div className="rise flex items-center gap-2" style={{ '--d': '0ms' } as React.CSSProperties}>
             <Flag tone="kilo">CKAD</Flag>
-            <Flag tone="quiet">Kubernetes 1.35</Flag>
+            <Flag tone="quiet">{intro.version}</Flag>
           </div>
 
           <h1
@@ -76,9 +47,7 @@ export function Overview() {
             className="rise mt-7 max-w-[46ch] text-[1.0625rem] leading-relaxed text-ink-2 sm:text-lg"
             style={{ '--d': '140ms' } as React.CSSProperties}
           >
-            A runnable cookbook for CKAD candidates. The goal is not to memorise YAML — it is to build
-            a mental model, use the API deliberately, observe what the control plane did, break things
-            on purpose, and work out why they broke.
+            {intro.statement}
           </p>
 
           <div
@@ -171,7 +140,7 @@ export function Overview() {
             </p>
 
             <dl className="mt-9 space-y-5 border-t border-rule pt-7">
-              {tagMeaning.map(([tag, meaning]) => (
+              {intro.legend.map(({ tag, meaning }) => (
                 <div key={tag} className="flex gap-4">
                   <dt className="w-[5.5rem] shrink-0 pt-px">
                     <Flag tone={tagTone[tag]}>{tag}</Flag>
@@ -182,15 +151,15 @@ export function Overview() {
             </dl>
 
             <p className="mt-9 max-w-[58ch] text-sm leading-relaxed text-ink-2">
-              Two appendices go past the exam: building a cluster by hand with kubeadm, then following
-              a request through Cilium, eBPF and the Gateway API. That is CKA and platform territory,
-              and it is marked as such.
+              {beyond.length} appendices go past the exam —{' '}
+              {beyond.map((p) => p.title).join('; ')}. That is CKA and platform territory, and it is
+              marked as such.
             </p>
           </div>
 
           <div>
             <div className="type-label mb-4 text-ink-3">The recurring teaching loop</div>
-            <FigureBlock code={TEACHING_LOOP} />
+            {intro.diagram && <FigureBlock code={intro.diagram} />}
           </div>
         </div>
       </section>
