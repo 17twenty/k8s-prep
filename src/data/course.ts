@@ -4,9 +4,9 @@
  */
 
 export type Tag = "CKAD" | "DEEP DIVE" | "DEV" | "OPS" | "PLATFORM"
-export type ChapterKind = 'brief' | 'lab'
+type ChapterKind = 'brief' | 'lab'
 
-export type Section = { id: string; title: string }
+type Section = { id: string; title: string }
 
 export type Chapter = {
   id: string
@@ -2544,7 +2544,7 @@ export const flatChapters = parts.flatMap((part) =>
   part.chapters.map((chapter) => ({ ...chapter, part })),
 )
 
-export type FlatChapter = (typeof flatChapters)[number]
+type FlatChapter = (typeof flatChapters)[number]
 
 const byId = new Map(flatChapters.map((c) => [c.id, c]))
 const orderById = new Map(flatChapters.map((c, i) => [c.id, i]))

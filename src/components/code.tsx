@@ -63,7 +63,7 @@ function CopyButton({ value }: { value: string }) {
 }
 
 /** A shell transcript: ink on paper, inverting the usual glowing terminal. */
-export function ShellBlock({ code }: { code: string }) {
+function ShellBlock({ code }: { code: string }) {
   const lines = highlight(code, "bash");
   const prompts = promptLines(code);
 
@@ -139,7 +139,7 @@ function Fold({ lines, children }: { lines: number; children: ReactNode }) {
 }
 
 /** A manifest or a listing. Line numbers because you will be told to edit one. */
-export function ManifestBlock({
+function ManifestBlock({
   code,
   lang,
   numbered = true,
@@ -203,7 +203,7 @@ export function FigureBlock({ code }: { code: string }) {
 }
 
 /** Expected output. Quiet, unactionable, clearly not something you type. */
-export function OutputBlock({ code }: { code: string }) {
+function OutputBlock({ code }: { code: string }) {
   return (
     <div className="my-7 border-l-2 border-rule bg-sheet/60 py-3 pr-4 pl-4">
       <pre className="mono overflow-x-auto text-[0.78125rem] leading-[1.75] text-ink-2">

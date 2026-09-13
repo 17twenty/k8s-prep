@@ -357,3 +357,45 @@ A python `s.replace()` that doesn't match fails **silently**, and an Edit that
 strips a trailing newline can join two statements (`const x = ...  if (...) {`)
 and break the file. After any scripted edit to `scripts/*.mjs`, run
 `node --check` on it; after any edit to README/docs, grep for the new text.
+- 2026-09-13T17:17:29+10:00 ## k8s-prep — dead code audit (Sept 2026) and what NOT to remove
+
+Use `npx knip@5 --no-progress` for this — hand-rolled grep loops gave false
+positives/negatives twice. Also `node --check` the .mjs scripts after edits.
+
+### Removed
+- My own leftover debug scripts in the repo root: `d.mjs`, `look.mjs`, `look2.mjs`.
+  (I keep creating these for puppeteer checks — delete them in the same turn.)
+- Unused shadcn components: badge, progress, scroll-area, separator, tooltip.
+  Only **button** and **sheet** are actually used.
+- `src/lib/utils.ts` — dead because this shadcn CLI imports `cn` from the **`cn`
+  npm package**, not `@/lib/utils`.
+- `public/hero.png`, `public/vite.svg`, `public/icons.svg` (scaffold/preset leftovers).
+  Only `favicon.svg` is referenced, by index.html.
+- deps: `@fontsource-variable/geist` (we use Archivo + Martian Mono), `clsx`,
+  `tailwind-merge` — verified `cn` has **no** dependencies/peerDeps and nothing
+  imports them directly.
+- `@keyframes sweep` in index.css (never used).
+- `export` dropped from `ShellBlock`/`ManifestBlock`/`OutputBlock` (internal to
+  `CodeBlock`) and from types `ChapterKind`/`Section`/`FlatChapter` in the
+  generator template.
+
+### Deliberately KEPT — do not "clean up"
+- **The shadcn design-token block** in `@theme` (`--color-card`, `--color-accent`,
+  `--color-popover`, all `--color-sidebar-*`, the full `--radius-*` scale). 16 of
+  49 tokens generate utilities nothing currently uses, BUT **measured: Tailwind v4
+  tree-shakes them to literally 0 bytes** in the built CSS (`grep -c -- '--color-card:'`
+  on dist css = 0). They cost nothing and they are the contract `npx shadcn add`
+  writes against. Removing them breaks future component adds for no gain.
+- Unused exports inside `src/components/ui/*` (`buttonVariants`, `SheetClose`,
+  `SheetHeader`, `SheetFooter`, `SheetDescription`) — vendored library files with a
+  standard export surface; editing them fights the CLI on the next add/update.
+- `tw-animate-css` — used by sheet.tsx (3 `data-state` animation utilities).
+
+Result: 15 runtime deps, 7 dev. Build 63.7KB css / 332KB js. knip clean apart from
+the vendored shadcn exports above.
+
+### Gotcha when smoke-testing mobile
+`document.querySelector('nav[aria-label="Course chapters"]')` returns the **hidden
+desktop rail** (it is `hidden lg:block`, so present in the DOM with offsetParent
+null). Querying it makes the mobile Sheet look broken. Select all and filter by
+`offsetParent !== null`, or assert on `[role="dialog"]`.

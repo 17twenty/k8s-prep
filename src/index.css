@@ -281,15 +281,6 @@
     }
 }
 
-@keyframes sweep {
-    from {
-        transform: rotate(0deg);
-    }
-    to {
-        transform: rotate(360deg);
-    }
-}
-
 .rise {
     animation: rise 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
     animation-delay: var(--d, 0ms);
