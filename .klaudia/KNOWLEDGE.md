@@ -88,3 +88,33 @@ Verified article/h1/footer-nav left edge and width are pixel-identical across
 
 Related: the markdown container uses `pt-8 [&>*:first-child]:mt-0` — otherwise the
 header's `pb-9` stacks with the first paragraph's `mt-5`.
+- 2026-09-13T12:48:59+10:00 ## k8s-prep — theming is single-mode by design; rail scrollbar is hidden
+
+**No dark mode, deliberately.** No `prefers-color-scheme` anywhere, no `.dark` token
+block, `.dark` variant never applied. Verified: body bg/fg identical under emulated
+light and dark. `:root` sets `color-scheme: only light` so the browser stops styling
+*its own* widgets (scrollbars, form controls) for an OS dark mode — that was the one
+remaining leak, since `colorScheme` computed as `normal` before.
+
+Global scrollbars restyled thin in `--rule` with
+`background-clip: padding-box; border: 3px solid transparent` — the inset trick means
+one rule works on paper, on sheet, and inside horizontally-scrolling code blocks.
+Don't go back to a solid `border: 3px solid var(--paper)`; it mismatches everywhere
+that isn't the page background.
+
+**Nav rail hides its scrollbar** (`.no-scrollbar` utility: `scrollbar-width: none` +
+`::-webkit-scrollbar{display:none}`) and replaces it with real affordances driven by
+`src/lib/use-scroll-edges.ts` (`useScrollEdges(viewport, content)`):
+- top/bottom gradient fades, shown only when there is content past that edge;
+- a ChevronDown button that pages down 80% of viewport height and retires at the
+  bottom (`tabIndex -1` + `pointer-events-none` when hidden);
+- on `currentId` change, the active link is scrolled into view via rAF + manual
+  `scrollTop` arithmetic on the rail — NOT `scrollIntoView`, which also scrolls the
+  window.
+
+The hook must observe the *content* wrapper, not just the scroll container: the rail
+grows/shrinks when parts expand, which a container-only ResizeObserver misses.
+
+Verified: 0px scrollbar gutter, no scrollbar pixels at the rail edge, deep chapter
+(D.25) auto-revealed, chevron retires at bottom, works in the mobile Sheet, and
+reduced-motion gets an instant jump instead of a smooth scroll.

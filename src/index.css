@@ -69,6 +69,12 @@
 }
 
 :root {
+    /* This design has one theme. The chart is printed on paper; paper does not
+       have a night mode. Declaring `only light` stops the browser dressing its
+       own widgets — scrollbars, form controls — for an OS-level dark mode they
+       would then clash with. */
+    color-scheme: only light;
+
     /* chart paper and marine ink */
     --paper: #dce2df;
     --sheet: #eef1ee;
@@ -132,6 +138,33 @@
     html {
         @apply font-sans;
         -webkit-text-size-adjust: 100%;
+        /* Thin, in the chart's own colours, rather than the OS default slab.
+           Applies to the page and to code blocks that scroll sideways. */
+        scrollbar-width: thin;
+        scrollbar-color: var(--rule) transparent;
+    }
+
+    ::-webkit-scrollbar {
+        width: 10px;
+        height: 10px;
+    }
+
+    ::-webkit-scrollbar-track {
+        background: transparent;
+    }
+
+    ::-webkit-scrollbar-thumb {
+        background: var(--rule);
+        /* inset via a transparent border so the thumb sits correctly on paper,
+           on sheet, and inside code blocks alike */
+        background-clip: padding-box;
+        border: 3px solid transparent;
+        border-radius: 999px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+        background: var(--ink-3);
+        background-clip: padding-box;
     }
 
     body {
@@ -184,6 +217,20 @@
         font-size: 0.8em;
         letter-spacing: -0.03em;
     }
+}
+
+/* The navigation rail carries its own affordance — edge fades and a chevron —
+   so the native bar is redundant there, and a pale OS scrollbar sitting on the
+   deep-water ground was the one thing on screen that looked unconsidered. */
+.no-scrollbar {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
 }
 
 /* The chart grid — a latitude/longitude net, printed faintly on the paper. */

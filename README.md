@@ -80,6 +80,26 @@ Shiki would have been a megabyte to colour `kubectl get pods`.
 | `src/lib/use-progress.tsx` | `useProgress()` — completion, resume point, totals |
 | `src/index.css` | tokens, type scale, chart textures |
 
+## One theme, on purpose
+
+There is no dark mode and no `prefers-color-scheme` anywhere. The chart is
+printed on paper; paper does not have a night mode. `:root` declares
+`color-scheme: only light` so the browser also stops dressing *its own* widgets
+— scrollbars, form controls — for an OS-level dark mode they would then clash
+with. Scrollbars are restyled thin, in `--rule`, inset with a transparent border
+so they sit correctly on paper, on sheet and inside code blocks.
+
+The navigation rail hides its scrollbar entirely (`.no-scrollbar`) and carries
+its own affordances instead, all driven by real scroll state
+(`src/lib/use-scroll-edges.ts`):
+
+- edge fades that appear only when there is content past that edge,
+- a chevron that pages down on press and retires at the bottom,
+- and the current chapter is scrolled into view on navigation — otherwise
+  nothing tells you that the highlighted entry is D.25, eighty items down.
+
+The rail scrolls, never the window. Reduced motion is respected.
+
 ## The design
 
 Kubernetes is Greek for *helmsman*, and the vocabulary is maritime throughout —

@@ -1,9 +1,10 @@
 import { cn } from 'cn'
-import { Check, ChevronRight } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { Check, ChevronDown, ChevronRight } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { NavLink, useLocation } from 'react-router'
 import { formatDuration, parts, totals, type Part } from '@/data/course'
 import { useProgress } from '@/lib/use-progress'
+import { useScrollEdges } from '@/lib/use-scroll-edges'
 
 function Burgee({ className }: { className?: string }) {
   // The Kilo flag — the international signal for the letter K. Blue hoist,
@@ -135,6 +136,41 @@ export function NavRail({ onNavigate }: { onNavigate?: () => void }) {
   const { pathname } = useLocation()
   const currentId = pathname.startsWith('/chapter/') ? pathname.slice('/chapter/'.length) : null
 
+  const viewport = useRef<HTMLElement>(null)
+  const content = useRef<HTMLDivElement>(null)
+  const { atTop, atBottom, scrollable } = useScrollEdges(viewport, content)
+
+  const page = (direction: 1 | -1) => {
+    const el = viewport.current
+    if (!el) return
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    el.scrollBy({
+      top: direction * el.clientHeight * 0.8,
+      behavior: reduced ? 'auto' : 'smooth',
+    })
+  }
+
+  /**
+   * Bring the current chapter into view when it is off screen. Without a
+   * scrollbar there is nothing else to tell you that chapter D.14 is the
+   * highlighted one, eighty entries down. Scrolls the rail only — never the
+   * window, which `scrollIntoView` would happily do as well.
+   */
+  useEffect(() => {
+    if (!currentId) return
+    const frame = requestAnimationFrame(() => {
+      const vp = viewport.current
+      const link = vp?.querySelector<HTMLElement>('[aria-current="page"]')
+      if (!vp || !link) return
+      const item = link.getBoundingClientRect()
+      const box = vp.getBoundingClientRect()
+      if (item.top < box.top + 8 || item.bottom > box.bottom - 8) {
+        vp.scrollTop += item.top - box.top - box.height / 2 + item.height / 2
+      }
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [currentId])
+
   const grouped = useMemo(() => {
     const out: { volume: string; parts: { part: Part; index: number }[] }[] = []
     parts.forEach((part, index) => {
@@ -189,28 +225,74 @@ export function NavRail({ onNavigate }: { onNavigate?: () => void }) {
         </div>
       </div>
 
-      <nav className="min-h-0 flex-1 overflow-y-auto px-5 py-5" aria-label="Course chapters">
-        {grouped.map((group, gi) => (
-          <div key={group.volume} className={cn(gi > 0 && 'mt-6 border-t border-abyss-rule pt-5')}>
-            <div className="type-label mb-2 text-signal/55">{group.volume}</div>
-            {group.parts.map(({ part, index }) => (
-              <PartGroup
-                key={part.id}
-                part={part}
-                index={index}
-                currentId={currentId}
-                onNavigate={onNavigate}
-              />
+      <div className="relative min-h-0 flex-1">
+        <nav
+          ref={viewport}
+          className="no-scrollbar h-full overflow-y-auto px-5 py-5"
+          aria-label="Course chapters"
+        >
+          <div ref={content}>
+            {grouped.map((group, gi) => (
+              <div
+                key={group.volume}
+                className={cn(gi > 0 && 'mt-6 border-t border-abyss-rule pt-5')}
+              >
+                <div className="type-label mb-2 text-signal/55">{group.volume}</div>
+                {group.parts.map(({ part, index }) => (
+                  <PartGroup
+                    key={part.id}
+                    part={part}
+                    index={index}
+                    currentId={currentId}
+                    onNavigate={onNavigate}
+                  />
+                ))}
+              </div>
             ))}
+            {/* room for the chevron to sit over without covering a link */}
+            <div aria-hidden="true" className={cn(scrollable && 'h-10')} />
           </div>
-        ))}
-      </nav>
+        </nav>
+
+        {/* The scrollbar is hidden, so the edges say where you are instead. */}
+        <div
+          aria-hidden="true"
+          className={cn(
+            'pointer-events-none absolute inset-x-0 top-0 h-8 bg-gradient-to-b from-abyss to-transparent transition-opacity duration-200',
+            atTop && 'opacity-0',
+          )}
+        />
+        <div
+          aria-hidden="true"
+          className={cn(
+            'pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-abyss via-abyss/85 to-transparent transition-opacity duration-200',
+            (atBottom || !scrollable) && 'opacity-0',
+          )}
+        />
+
+        <button
+          type="button"
+          onClick={() => page(1)}
+          tabIndex={atBottom || !scrollable ? -1 : undefined}
+          aria-label="Scroll the chapter list down"
+          className={cn(
+            'absolute bottom-3 left-1/2 inline-flex size-7 -translate-x-1/2 items-center justify-center',
+            'rounded-full border border-abyss-rule bg-abyss-2 text-foam/70 transition-all duration-200',
+            'hover:border-signal hover:text-signal',
+            atBottom || !scrollable
+              ? 'pointer-events-none translate-y-1 opacity-0'
+              : 'opacity-100',
+          )}
+        >
+          <ChevronDown className="size-4" />
+        </button>
+      </div>
 
       <div className="border-t border-abyss-rule px-5 py-3.5">
         <p className="mono text-[0.65rem] leading-relaxed text-foam/40">
           {totals.chapters} chapters · {formatDuration(totals.minutes)}
           <br />
-          Progress is stored in a cookie on this device.
+          Progress is stored locally on device.
         </p>
       </div>
     </div>
