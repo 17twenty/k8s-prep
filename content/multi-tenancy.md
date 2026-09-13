@@ -12,60 +12,27 @@ It is now:
 
 This is platform-engineering material, not CKAD material.
 
-The goal is not to memorise vCluster or Kamaji commands. It is to understand the architectural problem they solve and which security boundaries they do **not** replace.
+The goal is **not** to memorise product-specific commands. We will use ordinary RBAC, vCluster and Kamaji as hands-on experiments to make API, control-plane and worker isolation concrete.
+
+By the end we will have built three different models:
+
+```text
+one shared API
+    + namespace RBAC
+
+separate tenant API
+    + shared workers
+
+separate tenant API
+    + hosted control plane
+    + independently joined workers
+```
+
+The vCluster lab assumes you are continuing from the cookbook's existing `kind-ckad` cluster. The Kamaji lab deliberately creates a second kind cluster so that experimentation does not disturb the CKAD environment.
 
 ---
 
-# 1. One Shared Cluster: Namespace + RBAC
-
-The simplest multi-team model is one Kubernetes cluster with one API server.
-
-```text
-                         one cluster
-                             |
-                      kube-apiserver
-                             |
-              +--------------+--------------+
-              |                             |
-          namespace A                   namespace B
-              |                             |
-            Alice                           Bob
-              |                             |
-             RBAC                          RBAC
-```
-
-Alice and Bob authenticate to the same API server.
-
-RBAC can still create a useful administrative boundary:
-
-```text
-Alice:
-  get Pods in team-a                 yes
-  patch Deployments in team-a        yes
-  read Secrets in team-b             no
-  delete Nodes                       no
-  create ClusterRoleBindings         no
-```
-
-For trusted internal teams, this can be exactly the right answer.
-
-But notice what remains shared:
-
-```text
-kube-apiserver
-control-plane policy
-cluster-scoped APIs
-worker nodes, depending on scheduling
-kernel, when workloads share nodes
-CNI / CSI / device plugins
-parts of the storage and network fabric
-```
-
-Namespaces plus RBAC are therefore an **API authorization model**, not a complete answer to every kind of tenancy.
-
----
-
-# 2. Think in Isolation Layers
+# 1. Keep the Boundaries Separate
 
 A useful tenancy model has several layers.
 
@@ -122,7 +89,7 @@ hardware / cloud APIs
 "Who is allowed to change the infrastructure itself?"
 ```
 
-No single layer magically replaces all of the others.
+No single layer replaces all the others.
 
 For example:
 
@@ -132,410 +99,1492 @@ separate API servers
 separate kernels
 ```
 
-and:
+```text
+NoSchedule taint
+      !=
+authorization boundary
+```
 
 ```text
-separate worker nodes
+Kubernetes cluster-admin
       !=
-separate management credentials
+SSH root on the machine
 ```
+
+We are going to prove those distinctions rather than only state them.
 
 ---
 
-# 3. Why Give a Tenant Its Own API Server?
+# 2. Lab Zero: One Shared Cluster + Namespace RBAC
 
-Suppose Alice needs enough freedom to behave like a cluster administrator.
+Before adding virtual or hosted control planes, establish the baseline.
 
-On one shared cluster, granting:
+Make sure we are on the cookbook cluster:
 
-```text
-cluster-admin
+```bash
+kubectl config use-context kind-ckad
 ```
 
-means Alice can administer the shared cluster itself.
+Save the provider/host context. We will use this later because vCluster changes our current context for us:
 
-That is usually not what a platform provider wants.
+```bash
+export HOST_CONTEXT=$(kubectl config current-context)
+echo "$HOST_CONTEXT"
+```
 
-A different architecture is:
+Expected:
+
+```text
+kind-ckad
+```
+
+Create a namespace for Alice:
+
+```bash
+kubectl create namespace shared-alice
+```
+
+Create a small developer Role:
+
+```bash
+cat <<'EOF' | kubectl apply -f -
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: developer
+  namespace: shared-alice
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "services"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: alice-developer
+  namespace: shared-alice
+subjects:
+  - kind: User
+    name: alice
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: developer
+EOF
+```
+
+Because our kind administrator may impersonate users, we can ask the API server what Alice would be allowed to do:
+
+```bash
+kubectl auth can-i get pods \
+  --as=alice \
+  -n shared-alice
+```
+
+Expected:
+
+```text
+yes
+```
+
+She may create a Deployment in her namespace:
+
+```bash
+kubectl auth can-i create deployments.apps \
+  --as=alice \
+  -n shared-alice
+```
+
+Expected:
+
+```text
+yes
+```
+
+But she cannot create arbitrary namespaces:
+
+```bash
+kubectl auth can-i create namespaces \
+  --as=alice
+```
+
+Expected:
+
+```text
+no
+```
+
+Nor delete Nodes:
+
+```bash
+kubectl auth can-i delete nodes \
+  --as=alice
+```
+
+Expected:
+
+```text
+no
+```
+
+The model is:
 
 ```text
 Alice
   |
   v
-tenant A kube-apiserver
-  |
-  | Alice may be cluster-admin here
-  v
-tenant A Kubernetes view
-
-
-Bob
+same kube-apiserver as everyone else
   |
   v
-tenant B kube-apiserver
+RBAC
   |
-  | Bob may be cluster-admin here
-  v
-tenant B Kubernetes view
+  +-- shared-alice namespace    some access
+  +-- cluster-scoped objects    mostly no access
+  +-- other tenant namespaces   no access unless granted
 ```
 
-The provider then owns the infrastructure underneath both tenant control planes.
+This is a legitimate tenancy model for many internal platforms.
 
-The tenant can have broad authority **inside their cluster** without receiving authority over the provider's management cluster.
+But Alice still talks to the **same Kubernetes API** as everybody else.
 
-That is the architectural territory occupied by hosted control planes, virtual clusters and managed Kubernetes systems.
+That is the limitation we will explore next.
 
 ---
 
-# 4. vCluster: A Tenant Kubernetes API Above Provider Infrastructure
+# 3. Why Give a Tenant Another Kubernetes API?
 
-Current vCluster architecture gives each tenant cluster its own control plane, including its own Kubernetes API server, controller manager, datastore and syncer.
+Suppose Alice needs broad Kubernetes freedom.
+
+Inside a normal shared cluster, this would be dangerous:
+
+```text
+Alice
+  |
+  v
+cluster-admin
+  |
+  v
+shared cluster
+```
+
+`cluster-admin` is intentionally enormous.
+
+A platform provider often wants something different:
+
+```text
+Alice
+  |
+  v
+Alice's Kubernetes API
+  |
+  | cluster-admin is okay HERE
+  v
+Alice's tenant cluster
+
+
+provider
+  |
+  v
+provider Kubernetes API
+  |
+  | Alice does NOT get these credentials
+  v
+provider infrastructure
+```
+
+This changes the question from:
+
+> How carefully can I restrict Alice inside my cluster?
+
+into:
+
+> Why should Alice be an administrator of my cluster at all?
+
+That distinction is central to virtual clusters, hosted control planes and many managed Kubernetes systems.
+
+---
+
+# 4. Lab: Give Alice a vCluster
+
+vCluster gives a tenant its own Kubernetes API while allowing the platform operator to host the tenant control plane on existing infrastructure.
+
+We will begin with its shared-node model because we can run the whole experiment on our existing kind cluster.
+
+## 4.1 Install the vCluster CLI
+
+On macOS with Homebrew:
+
+```bash
+brew install loft-sh/tap/vcluster
+```
+
+Verify it:
+
+```bash
+vcluster --version
+```
+
+Make sure the host context is still our cookbook cluster:
+
+```bash
+kubectl config use-context "$HOST_CONTEXT"
+```
+
+## 4.2 Create Alice's tenant cluster
+
+Create a tenant cluster called `alice` inside the provider namespace `tenant-alice`:
+
+```bash
+vcluster create alice \
+  --namespace tenant-alice
+```
+
+The vCluster CLI automatically connects you to the new tenant cluster when creation completes.
+
+Check the current context:
+
+```bash
+kubectl config current-context
+```
+
+Then ask the API server what namespaces exist:
+
+```bash
+kubectl get namespaces
+```
+
+You should see an ordinary Kubernetes-looking namespace view such as:
+
+```text
+default
+kube-node-lease
+kube-public
+kube-system
+```
+
+Alice is **not** looking at the provider cluster's namespace list.
+
+She is talking to another Kubernetes API.
 
 Conceptually:
 
 ```text
-                 provider control-plane cluster
-
-                    Kubernetes API
-                         |
-           +-------------+-------------+
-           |                           |
-           v                           v
-   tenant A control plane       tenant B control plane
-   - API server                 - API server
-   - controller manager         - controller manager
-   - datastore                  - datastore
-   - syncer                     - syncer
-           |                           |
-           v                           v
-         Alice                         Bob
+                         kind-ckad
+                    provider Kubernetes
+                           API
+                            |
+                            v
+                     tenant-alice
+                            |
+                      vCluster CP
+                    + API server
+                    + controllers
+                    + datastore
+                    + syncer
+                            |
+                            v
+                          Alice
 ```
 
-Alice talks to the tenant A API server.
+---
 
-She does not need credentials for the provider's control-plane cluster API.
+# 5. Alice Can Be an Administrator of Her Cluster
 
-Inside tenant A, Alice can have tenant-local RBAC such as:
+By default, the kubeconfig generated by `vcluster connect` uses tenant administrator credentials.
+
+Prove what our current credential can do:
+
+```bash
+kubectl auth can-i create namespaces
+```
+
+Expected:
 
 ```text
-cluster-admin
+yes
 ```
 
-without that automatically becoming provider-cluster `cluster-admin`.
+Try another cluster-scoped operation:
 
-## 4.1 Shared-node mode
+```bash
+kubectl auth can-i create clusterrolebindings.rbac.authorization.k8s.io
+```
 
-With shared nodes, tenant workloads are projected onto the underlying control-plane cluster and scheduled onto its node pool.
+Expected:
 
-A simplified path is:
+```text
+yes
+```
+
+Make the permission set explicit:
+
+```bash
+kubectl auth can-i '*' '*'
+```
+
+With tenant administrator credentials this should report:
+
+```text
+yes
+```
+
+Now compare that with Alice against the **provider API**:
+
+```bash
+kubectl --context "$HOST_CONTEXT" \
+  auth can-i delete nodes \
+  --as=alice
+```
+
+Expected:
+
+```text
+no
+```
+
+This is the important model:
+
+```text
+              TENANT API
+
+Alice's tenant credential
+        |
+        v
+  tenant cluster-admin
+        |
+        v
+      YES
+
+
+             PROVIDER API
+
+Alice
+  |
+  v
+provider RBAC
+  |
+  +-- delete Nodes?                NO
+  +-- create ClusterRoleBinding?   NO
+```
+
+`cluster-admin` is not a magical global property attached to a human being.
+
+It is authorization **against a particular Kubernetes API**.
+
+> In this lab we use vCluster-generated credentials and Kubernetes impersonation to make the boundary obvious. A production platform might authenticate the same human through OIDC or another identity provider on both APIs and assign different authorization in each one.
+
+---
+
+# 6. Issue a Less Powerful Tenant Credential
+
+A tenant does not need to give every user administrator access either.
+
+vCluster can generate a kubeconfig backed by a ServiceAccount and bind that ServiceAccount to a tenant-local ClusterRole.
+
+Create/connect using a read-only tenant identity:
+
+```bash
+vcluster connect alice \
+  --namespace tenant-alice \
+  --service-account kube-system/alice-viewer \
+  --cluster-role view
+```
+
+Now test it:
+
+```bash
+kubectl auth can-i get pods --all-namespaces
+```
+
+Expected:
+
+```text
+yes
+```
+
+But:
+
+```bash
+kubectl auth can-i create namespaces
+```
+
+Expected:
+
+```text
+no
+```
+
+And:
+
+```bash
+kubectl auth can-i create deployments.apps
+```
+
+Expected:
+
+```text
+no
+```
+
+So there are now **two authorization domains** in play:
+
+```text
+provider API
+    |
+    +-- provider decides who may manage vCluster infrastructure
+
+Alice tenant API
+    |
+    +-- tenant decides who is admin, viewer, developer, etc.
+```
+
+Reconnect with the default tenant administrator credential for the next exercise:
+
+```bash
+vcluster connect alice \
+  --namespace tenant-alice
+```
+
+---
+
+# 7. Create a Workload Inside the Tenant
+
+Create another namespace from inside Alice's cluster:
+
+```bash
+kubectl create namespace apps
+```
+
+Deploy nginx:
+
+```bash
+kubectl create deployment web \
+  --image=nginx:1.27-alpine \
+  -n apps
+```
+
+Watch it:
+
+```bash
+kubectl get pods \
+  -n apps \
+  -o wide
+```
+
+From Alice's perspective this is just Kubernetes:
 
 ```text
 Alice
   |
   v
-tenant A API
+POST Deployment to tenant API
   |
   v
-syncer
+Deployment controller
   |
   v
-provider cluster namespace
+ReplicaSet
   |
   v
+Pod
+```
+
+But shared-node vCluster has another layer underneath.
+
+Let's look behind the curtain.
+
+---
+
+# 8. Look at the Same Workload From the Provider Side
+
+Disconnect from the tenant:
+
+```bash
+vcluster disconnect
+```
+
+If necessary, explicitly restore the host context:
+
+```bash
+kubectl config use-context "$HOST_CONTEXT"
+```
+
+Inspect the namespace where the vCluster lives:
+
+```bash
+kubectl get pods \
+  -n tenant-alice \
+  -o wide
+```
+
+You should see the tenant control-plane Pod and translated workloads.
+
+A workload created inside the tenant might appear with a rewritten host-side name similar to:
+
+```text
+web-xxxxxxxxxx-yyyyy-x-apps-x-alice
+```
+
+The exact generated name is not important.
+
+The important relationship is:
+
+```text
+TENANT VIEW
+-----------
+namespace: apps
+pod:       web-xxxxx
+
+        |
+        | sync / translation
+        v
+
+PROVIDER VIEW
+-------------
+namespace: tenant-alice
+pod:       rewritten host-side name
+```
+
+In shared-node mode, the vCluster syncer translates workload resources onto the provider cluster so the provider scheduler and kubelets can run them.
+
+The tenant does not need credentials for that provider API.
+
+---
+
+# 9. Follow One Pod Through the vCluster Boundary
+
+Reconnect:
+
+```bash
+vcluster connect alice \
+  --namespace tenant-alice
+```
+
+Look at the tenant Pod:
+
+```bash
+kubectl get pods \
+  -n apps \
+  -o wide
+```
+
+Switch back to the host:
+
+```bash
+vcluster disconnect
+kubectl config use-context "$HOST_CONTEXT"
+```
+
+Then:
+
+```bash
+kubectl get pods \
+  -n tenant-alice \
+  -o wide
+```
+
+You have just observed the complete path:
+
+```text
+kubectl
+   |
+   v
+Alice tenant kube-apiserver
+   |
+   v
+tenant Pod object
+   |
+   v
+vCluster syncer
+   |
+   v
+provider kube-apiserver
+   |
+   v
+translated Pod
+   |
+   v
 provider scheduler
-  |
-  v
-shared worker node
+   |
+   v
+provider node / kubelet
 ```
 
-The syncer translates or synchronizes resources such as Pods, Services, Secrets and ConfigMaps between the tenant cluster and the underlying cluster.
+When the provider-side Pod changes status, vCluster synchronizes that observation back to the tenant API.
 
-The tenant sees its own Kubernetes API and resource names.
-
-The provider sees the translated underlying resources.
-
-This gives strong **API/control-plane separation**, but shared worker nodes still mean workloads can share infrastructure and a kernel.
-
-Current vCluster documentation is explicit about that distinction: shared nodes are intended for trusted/internal tenants, development, testing and CI-style use cases rather than being the worker isolation boundary for untrusted external tenants.
-
-Think:
+So even here we are still using the same control-loop model from Chapter 1:
 
 ```text
-separate tenant API      yes
-separate tenant RBAC     yes
-separate physical node   no, not necessarily
-separate kernel          no, not in shared-node mode
+desired tenant object
+       |
+       v
+translation / reconciliation
+       |
+       v
+provider object
+       |
+       v
+actual workload
+       |
+       v
+status flows back
 ```
 
-## 4.2 Private-node mode
+---
 
-vCluster can instead attach dedicated worker nodes to an individual tenant cluster.
+# 10. Shared API Isolation Is Not Worker Isolation
+
+We have proven that Alice has a separate Kubernetes API.
+
+But in this default shared-node model, her nginx workload ultimately runs on the same provider worker infrastructure as other workloads.
 
 ```text
-provider control-plane cluster
-        |
-        +-- tenant A control plane
-        |         |
-        |         v
-        |      tenant A API
-        |         |
-        |         +---- worker A1
-        |         +---- worker A2
-        |
-        +-- tenant B control plane
-                  |
-                  v
-               tenant B API
-                  |
-                  +---- worker B1
-                  +---- worker B2
+Tenant A API         Tenant B API
+     |                    |
+     v                    v
+ translated Pods     translated Pods
+       \                  /
+        \                /
+         v              v
+          provider nodes
+                |
+                v
+           shared kernel
 ```
 
-Now workload isolation is materially different:
+So:
 
 ```text
-tenant A Pods -> tenant A nodes
-
-tenant B Pods -> tenant B nodes
+separate tenant API       yes
+separate tenant RBAC      yes
+separate host namespace   yes
+separate physical node    not necessarily
+separate kernel           no, not in shared-node mode
 ```
 
-The tenant control plane remains provider-hosted while compute can be dedicated to the tenant.
+Current vCluster guidance treats shared nodes as appropriate for trusted tenants such as internal development, CI and testing.
 
-This is the important architectural lesson:
+It explicitly does **not** treat this model as the worker security boundary for untrusted external tenants with arbitrary Kubernetes workload access.
 
-> Control-plane isolation and worker isolation are independent choices.
+That is not a defect in RBAC.
 
-## 4.3 Taints and dedicated pools are not automatically private nodes
+It is a different layer of the architecture.
 
-A node selector or taint can constrain placement:
+---
+
+# 11. A Small Shared-Node Hardening Recipe
+
+Even for trusted tenants, the provider should not assume the separate API is sufficient on its own.
+
+For example, vCluster can create host-side NetworkPolicy around the tenant workload namespace:
+
+```yaml
+policies:
+  networkPolicy:
+    enabled: true
+```
+
+A more opinionated baseline can look like:
+
+```yaml
+policies:
+  podSecurityStandard: restricted
+  resourceQuota:
+    enabled: true
+  limitRange:
+    enabled: true
+  networkPolicy:
+    enabled: true
+    workload:
+      publicEgress:
+        enabled: false
+sync:
+  toHost:
+    pods:
+      useSecretsForSATokens: true
+```
+
+Save that as `vcluster-hardening.yaml`, then apply it as an upgrade:
+
+```bash
+vcluster create alice \
+  --namespace tenant-alice \
+  --upgrade \
+  --connect=false \
+  -f vcluster-hardening.yaml
+```
+
+But do **not** confuse configuration with enforcement.
 
 ```text
-Tenant A workloads
+NetworkPolicy object exists
+       !=
+CNI actually enforces NetworkPolicy
+```
+
+The host CNI must implement the policy.
+
+Likewise:
+
+```text
+Pod Security Standard
+       !=
+separate kernel
+```
+
+```text
+resource quota
+       !=
+strong workload isolation
+```
+
+Hardening improves the shared-node model. It does not change its fundamental trust boundary.
+
+> `restricted` Pod Security may also break workloads that assume root privileges. Treat that as useful feedback about the workload rather than blindly weakening the platform baseline.
+
+---
+
+# 12. What Would vCluster Private Nodes Change?
+
+vCluster also supports a model where tenant workers are not shared with the provider worker pool.
+
+This requires vCluster Platform and separate Linux worker machines, so it is not part of our simple `kind-ckad` lab.
+
+The configuration begins with something like:
+
+```yaml
+privateNodes:
+  enabled: true
+  vpn:
+    enabled: true
+networking:
+  podCIDR: 10.64.0.0/16
+  serviceCIDR: 10.128.0.0/16
+```
+
+A private-node tenant cluster is created with:
+
+```bash
+vcluster create alice-private \
+  --namespace tenant-alice-private \
+  --values vcluster-private.yaml
+```
+
+An interesting thing happens immediately:
+
+```bash
+kubectl get nodes
+```
+
+Expected before joining any workers:
+
+```text
+No resources found.
+```
+
+That is not a broken cluster.
+
+```text
+control plane exists
+       !=
+worker nodes exist
+```
+
+Once private workers are joined:
+
+```text
+Alice tenant API
       |
       v
-nodes labelled tenant=a
+Alice private workers
+
+Bob tenant API
+      |
+      v
+Bob private workers
 ```
 
-That can be operationally useful.
-
-But placement is not identical to isolation.
-
-If several tenants still share the same underlying nodes or kernel, a label did not magically create a VM or hardware boundary.
-
-Likewise a taint is not an authorization rule if the tenant is permitted to add a matching toleration.
+The provider-hosted control plane and tenant compute have become separate choices.
 
 ---
 
-# 5. Kamaji: Hosted Upstream Control Planes
+# 13. Clean Up the vCluster Lab
 
-Kamaji approaches the problem differently.
+Before moving to Kamaji, delete Alice's vCluster:
 
-Instead of giving every Kubernetes cluster dedicated control-plane machines, Kamaji runs tenant Kubernetes control-plane components as workloads inside a provider-operated **Management Cluster**.
+```bash
+kubectl config use-context "$HOST_CONTEXT"
+```
+
+```bash
+vcluster delete alice \
+  --namespace tenant-alice
+```
+
+Remove the baseline namespace too:
+
+```bash
+kubectl delete namespace shared-alice
+```
+
+Our original CKAD cluster remains intact.
+
+---
+
+# 14. Kamaji: Host the Tenant Control Plane, Not Its Workers
+
+Kamaji approaches the broad problem differently.
+
+Instead of every tenant owning dedicated control-plane VMs, Kamaji runs upstream Kubernetes control-plane components as workloads inside a provider-operated **Management Cluster**.
+
+```text
+                      Management Cluster
+
+                        Kamaji operator
+                              |
+             +----------------+----------------+
+             |                                 |
+             v                                 v
+      Tenant A control plane            Tenant B control plane
+      kube-apiserver                    kube-apiserver
+      controller-manager                controller-manager
+      scheduler                         scheduler
+             |                                 |
+             v                                 v
+      tenant A API endpoint              tenant B API endpoint
+             |                                 |
+             v                                 v
+      tenant A workers                   tenant B workers
+```
+
+This creates a clean separation:
+
+```text
+control-plane lifecycle
+        |
+        v
+provider management cluster
+
+worker lifecycle
+        |
+        v
+VMs / bare metal / Cluster API / other provisioning
+```
+
+Let's build one.
+
+---
+
+# 15. Lab: Create a Kamaji Management Cluster on kind
+
+Kamaji's official kind walkthrough is intended for development and learning only.
+
+We will create a **separate** kind cluster named `kamaji`.
+
+Prerequisites:
+
+```text
+docker
+kind
+kubectl
+helm
+jq
+```
+
+Create the management cluster:
+
+```bash
+kind create cluster --name kamaji
+```
+
+Verify:
+
+```bash
+kubectl config current-context
+```
+
+Expected:
+
+```text
+kind-kamaji
+```
+
+Save the context:
+
+```bash
+export KAMAJI_CONTEXT=$(kubectl config current-context)
+```
+
+---
+
+# 16. Install cert-manager
+
+Kamaji uses admission webhooks and relies on cert-manager for their TLS certificates.
+
+Add the repository:
+
+```bash
+helm repo add jetstack https://charts.jetstack.io
+helm repo update
+```
+
+Install cert-manager:
+
+```bash
+helm upgrade --install cert-manager jetstack/cert-manager \
+  --namespace cert-manager \
+  --create-namespace \
+  --version v1.18.3 \
+  --set crds.enabled=true
+```
+
+Watch it become ready:
+
+```bash
+kubectl get pods \
+  -n cert-manager \
+  -w
+```
+
+Press `Ctrl-C` once the Pods are Ready.
+
+> The pinned version above follows the current Kamaji kind walkthrough when this appendix was written. If upstream moves on, prefer the dependency versions in the current official guide.
+
+---
+
+# 17. Install MetalLB for Tenant API Endpoints
+
+A Kamaji Tenant Control Plane needs an API endpoint.
+
+In this kind lab, the official walkthrough uses MetalLB to provide LoadBalancer addresses on the Docker `kind` network.
+
+Install MetalLB:
+
+```bash
+kubectl apply -f \
+  https://raw.githubusercontent.com/metallb/metallb/v0.15.3/config/manifests/metallb-native.yaml
+```
+
+Wait for its controller:
+
+```bash
+kubectl wait \
+  --namespace metallb-system \
+  --for=condition=Available \
+  deployment/controller \
+  --timeout=120s
+```
+
+Get the IPv4 gateway of the Docker `kind` network:
+
+```bash
+GW_IP=$(docker network inspect kind \
+  | jq -r '.[0].IPAM.Config[] | select(.Gateway | test("^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$")) | .Gateway')
+
+echo "$GW_IP"
+```
+
+Derive the first two octets:
+
+```bash
+NET_IP=$(echo "$GW_IP" \
+  | sed -E 's|^([0-9]+\.[0-9]+)\..*$|\1|g')
+
+echo "$NET_IP"
+```
+
+Create an address pool near the top of that Docker subnet:
+
+```bash
+cat <<EOF | sed -E "s|172.19|${NET_IP}|g" | kubectl apply -f -
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: kind-ip-pool
+  namespace: metallb-system
+spec:
+  addresses:
+    - 172.19.255.200-172.19.255.250
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: kind-l2
+  namespace: metallb-system
+EOF
+```
+
+This is lab networking, not a production LoadBalancer design.
+
+---
+
+# 18. Install Kamaji
+
+Add the Clastix chart repository:
+
+```bash
+helm repo add clastix https://clastix.github.io/charts
+helm repo update
+```
+
+Install Kamaji:
+
+```bash
+helm upgrade --install kamaji clastix/kamaji \
+  --namespace kamaji-system \
+  --create-namespace \
+  --set 'resources=null' \
+  --version 0.0.0+latest
+```
+
+Watch the installation:
+
+```bash
+kubectl get pods \
+  -n kamaji-system \
+  -w
+```
+
+Then verify that Kamaji extended the Kubernetes API:
+
+```bash
+kubectl get crds \
+  | grep -i kamaji
+```
+
+This should already look familiar:
+
+```text
+install operator
+      |
+      v
+new CRD appears
+      |
+      v
+new declarative API available
+```
+
+---
+
+# 19. Create a TenantControlPlane
+
+Apply Kamaji's current sample TenantControlPlane:
+
+```bash
+kubectl apply -f \
+  https://raw.githubusercontent.com/clastix/kamaji/master/config/samples/kamaji_v1alpha1_tenantcontrolplane.yaml
+```
+
+Watch it reconcile:
+
+```bash
+kubectl get tcp -w
+```
+
+Eventually you should see a state similar to:
+
+```text
+NAME      VERSION   STATUS   CONTROL-PLANE ENDPOINT   KUBECONFIG
+k8s-133   ...       Ready    ...:6443                 k8s-133-admin-kubeconfig
+```
+
+Stop the watch with `Ctrl-C`.
+
+Inspect what Kamaji created in the **management cluster**:
+
+```bash
+kubectl get tcp,deploy,pods,svc
+```
+
+The conceptual chain is:
+
+```text
+TenantControlPlane
+       |
+       v
+Kamaji controller
+       |
+       v
+Deployment / Service / certificates / datastore state
+       |
+       v
+running tenant kube-apiserver
+       + controller-manager
+       + scheduler
+```
+
+This is the same `spec -> controller -> status` model we began the entire cookbook with.
+
+Kamaji is simply using it to create Kubernetes control planes.
+
+---
+
+# 20. Retrieve the Tenant kubeconfig
+
+Kamaji writes the tenant administrator kubeconfig into a Secret named after the TenantControlPlane.
+
+For the sample tenant:
+
+```bash
+kubectl get secret k8s-133-admin-kubeconfig
+```
+
+Extract it:
+
+```bash
+kubectl get secret k8s-133-admin-kubeconfig \
+  -o jsonpath='{.data.admin\.conf}' \
+  | base64 -d \
+  > /tmp/kamaji-tenant.conf
+```
+
+Inspect its target without changing your main kubeconfig:
+
+```bash
+kubectl --kubeconfig=/tmp/kamaji-tenant.conf \
+  config view --minify
+```
+
+We now have separate credentials for separate APIs:
+
+```text
+~/.kube/config
+    -> provider / management clusters
+
+/tmp/kamaji-tenant.conf
+    -> tenant Kubernetes API
+```
+
+---
+
+# 21. Talk Directly to the Tenant API
+
+Try:
+
+```bash
+kubectl --kubeconfig=/tmp/kamaji-tenant.conf \
+  cluster-info
+```
+
+Then:
+
+```bash
+kubectl --kubeconfig=/tmp/kamaji-tenant.conf \
+  get namespaces
+```
+
+Now the important command:
+
+```bash
+kubectl --kubeconfig=/tmp/kamaji-tenant.conf \
+  get nodes
+```
+
+Expected:
+
+```text
+No resources found.
+```
+
+This is not an error.
+
+We successfully have:
+
+```text
+kube-apiserver          yes
+controller-manager      yes
+scheduler               yes
+Kubernetes API          yes
+worker node             no
+```
+
+That gives us a clean mental model:
+
+```text
+control plane exists
+        !=
+compute exists
+```
+
+The tenant has a Kubernetes cluster control plane before it has somewhere to run application Pods.
+
+---
+
+# 22. macOS / Docker Desktop Note
+
+On native Linux, the MetalLB address on the Docker `kind` network is often directly reachable from the host.
+
+On macOS with Docker Desktop, the Docker bridge network may not be routed directly into macOS.
+
+That means this can happen:
+
+```text
+TenantControlPlane     Ready
+LoadBalancer IP        allocated
+kubeconfig             valid
+
+but
+
+kubectl from macOS     cannot route to that Docker-network IP
+```
+
+Do not interpret that as Kamaji reconciliation failing.
+
+First confirm from the management side:
+
+```bash
+kubectl --context "$KAMAJI_CONTEXT" get tcp
+```
+
+and:
+
+```bash
+kubectl --context "$KAMAJI_CONTEXT" get svc
+```
+
+The official Kamaji kind guide calls out this Docker bridge/macOS case and suggests running tenant API checks from an environment that can reach the kind Docker network, including the kind control-plane container when appropriate.
+
+The networking lesson is useful in its own right:
+
+```text
+API exists
+   !=
+my current machine has a route to that API
+```
+
+Production Kamaji environments expose the API deliberately with normal LoadBalancer, DNS, Gateway or equivalent networking rather than relying on Docker Desktop bridge routing.
+
+---
+
+# 23. What Would Joining a Worker Look Like?
+
+Kamaji deliberately does not create tenant worker machines for you.
+
+Workers might come from:
+
+```text
+cloud VMs
+bare metal
+Cluster API
+an infrastructure platform
+manual provisioning
+```
+
+Once a Linux machine has the required container runtime, kubelet and kubeadm components installed, the tenant control plane can generate an ordinary kubeadm join command.
 
 Conceptually:
 
-```text
-                       Management Cluster
-
-                         Kamaji operator
-                               |
-              +----------------+----------------+
-              |                                 |
-              v                                 v
-       Tenant A control plane            Tenant B control plane
-       kube-apiserver                    kube-apiserver
-       controller-manager                controller-manager
-       scheduler                         scheduler
-              |                                 |
-              v                                 v
-       tenant A API endpoint              tenant B API endpoint
-              |                                 |
-          tenant A workers                    tenant B workers
+```bash
+kubeadm --kubeconfig=/tmp/kamaji-tenant.conf \
+  token create \
+  --print-join-command
 ```
 
-The control-plane components are upstream Kubernetes components rather than tenant-owned control-plane VMs.
-
-A tenant still sees a normal Kubernetes API endpoint and kubeconfig.
-
-The worker nodes are ordinary Kubernetes workers - VMs or bare-metal servers - that join their Tenant Control Plane just as they would join a conventional cluster.
-
-So instead of:
+That produces the familiar shape:
 
 ```text
-Tenant A cluster
-  +-- control-plane VM 1
-  +-- control-plane VM 2
-  +-- control-plane VM 3
-  +-- worker 1
-  +-- worker 2
+kubeadm join <tenant-api>:6443 \
+  --token ... \
+  --discovery-token-ca-cert-hash ...
 ```
 
-we can have:
+Run that command on the intended worker machine.
+
+Then:
+
+```bash
+kubectl --kubeconfig=/tmp/kamaji-tenant.conf \
+  get nodes
+```
+
+would move from:
 
 ```text
-provider management cluster
-  +-- Tenant A control-plane Pods
-  +-- Tenant B control-plane Pods
-  +-- Tenant C control-plane Pods
-
-Tenant A infrastructure
-  +-- worker 1
-  +-- worker 2
+No resources found.
 ```
 
-The tenant receives access to:
+towards something like:
+
+```text
+NAME        STATUS   ROLES    AGE
+worker-01   Ready    <none>   30s
+```
+
+The architecture is therefore:
+
+```text
+Kamaji management cluster
+       |
+       +-- tenant kube-apiserver
+       +-- tenant controller-manager
+       +-- tenant scheduler
+
+                 |
+                 | Kubernetes API
+                 v
+
+        independently provisioned
+             worker nodes
+```
+
+Kamaji can also integrate with Cluster API so that worker lifecycle becomes declarative rather than a manual `kubeadm join` exercise.
+
+---
+
+# 24. The Provider Does Not Need to Give Away Its Management Cluster
+
+Return to the original access-control question.
+
+A tenant can receive:
+
+```text
+/tmp/kamaji-tenant.conf
+```
+
+which grants access to:
 
 ```text
 Tenant A kube-apiserver
 ```
 
-without needing access to:
+without receiving credentials for:
 
 ```text
-the Linux hosts running the Management Cluster
+kind-kamaji management API
 ```
 
-That cleanly demonstrates the distinction from the main cookbook:
+and without receiving:
 
 ```text
-Kubernetes API administration
-        !=
-machine administration
+SSH access to the management hosts
 ```
 
-## 5.1 TenantControlPlane is itself declarative Kubernetes
-
-Kamaji exposes a `TenantControlPlane` custom resource.
-
-Conceptually:
+Those are different trust boundaries:
 
 ```text
-TenantControlPlane spec
-          |
-          v
-Kamaji controller
-          |
-          v
-control-plane Deployment / Service / datastore configuration
-          |
-          v
-TenantControlPlane status
+                     TENANT
+                        |
+                        v
+                 Tenant API endpoint
+                        |
+                        v
+               tenant Kubernetes RBAC
+
+================================================
+                  provider boundary
+================================================
+
+               Management Cluster API
+                        |
+               Kamaji / controllers
+                        |
+                host infrastructure
 ```
 
-This should look very familiar after the cookbook's CRD and controller chapters.
+The tenant may be `cluster-admin` above the line.
 
-Kamaji is Kubernetes reconciliation being used to create and operate more Kubernetes control planes.
+That does not imply they are administrator below it.
 
 ---
 
-# 6. vCluster and Kamaji Solve Related Problems Differently
+# 25. vCluster and Kamaji: Compare What We Actually Built
 
-A simplified comparison is:
+We have now used both models instead of only drawing them.
 
-| Question | Namespace + RBAC | vCluster | Kamaji |
+| Question | Shared namespace + RBAC | vCluster shared nodes | Kamaji |
 |---|---|---|---|
-| Separate tenant API server | No | Yes | Yes |
-| Tenant-local RBAC | Shared API scope | Yes | Yes |
-| Tenant can be admin without provider-cluster admin | Not safely as cluster-admin | Yes, inside tenant cluster | Yes, inside tenant cluster |
-| Provider hosts tenant control plane | Shared cluster CP | Yes | Yes |
-| Shared-worker option | Yes | Yes | Not the core Kamaji model |
-| Dedicated tenant workers | Possible by platform design | Yes, private-node model | Yes, normal tenant workers |
-| Workloads projected into provider cluster | Native shared resources | In shared-node mode | No - workers join tenant CP |
-| Upstream-style tenant control plane | Same shared CP | vCluster tenant CP implementation | Yes, upstream Kubernetes components |
-| Primary abstraction | permissions inside one cluster | tenant cluster / virtualized control plane | hosted TenantControlPlane |
+| Tenant has separate kube-apiserver | No | Yes | Yes |
+| Tenant-local RBAC | No separate API | Yes | Yes |
+| Tenant can have broad admin without provider-cluster admin | Not as shared `cluster-admin` | Yes | Yes |
+| Provider hosts tenant control plane | Shared provider CP | Yes | Yes |
+| Tenant workload becomes a Pod on provider cluster | Directly | Yes, translated/synced | No - worker joins tenant API |
+| Workers can be shared | Yes | Yes | Not the core model |
+| Dedicated workers possible | By platform design | Yes, private nodes | Yes |
+| Worker lifecycle bundled into basic control-plane creation | N/A | Depends on worker model | No |
+| Provider management credentials required by tenant | Same shared API | No | No |
 
-Do not read this table as a product scorecard.
+The important difference is not which product has the longest feature list.
 
-The useful question is:
-
-> Where is the boundary I actually need?
+It is **where each architecture places the boundary**.
 
 ---
 
-# 7. The Control-Plane Node Question Revisited
+# 26. Revisit the Control-Plane Node Question
 
-The original question that led us here was roughly:
+The original question was roughly:
 
 > How do I let users operate Kubernetes without letting them control the control-plane nodes?
 
-There are several separate meanings hiding inside that sentence.
+There were actually four questions hiding inside it.
 
-## 7.1 May the user modify Node API objects?
+## 26.1 May Alice modify the Node API object?
 
 That is Kubernetes authorization:
 
-```text
-User
- |
- v
-kube-apiserver
- |
- v
-RBAC
- |
- +-- get nodes?       maybe
- +-- delete nodes?    probably not
-```
-
-Test with:
-
 ```bash
-kubectl auth can-i delete nodes --as=alice
+kubectl auth can-i delete nodes \
+  --as=alice
 ```
 
-## 7.2 May the user's Pod run on infrastructure nodes?
+RBAC answers this.
 
-That is scheduling and policy:
+## 26.2 May Alice's Pod run on a particular node?
+
+That is scheduling and admission policy:
 
 ```text
-Pod
- |
- v
-scheduler
- |
- +-- node labels / affinity
- +-- taints / tolerations
- +-- admission policy
+nodeSelector
+affinity
+taints / tolerations
+admission
 ```
 
-A control-plane `NoSchedule` taint can keep ordinary workloads away.
+A control-plane `NoSchedule` taint is useful placement policy.
 
-But if the tenant can add arbitrary tolerations, the taint alone is not a strong trust boundary.
+It is not a hard authorization boundary if Alice is allowed to submit arbitrary tolerations.
 
-## 7.3 May the user log into the machine?
+## 26.3 May Alice log into the machine?
 
-That is infrastructure security:
+That is infrastructure access:
 
 ```text
 cloud IAM
-SSH credentials
+SSH keys
 VPN / firewall
-bastion policy
-OS accounts
+bastions
+OS users
 ```
 
-Kubernetes RBAC does not revoke someone's SSH key.
+Kubernetes RBAC does not remove Alice's SSH key.
 
-## 7.4 Does the tenant need to see the provider control plane at all?
+## 26.4 Does Alice need to see the provider API at all?
 
-This is the architectural step vCluster and Kamaji make interesting:
+That is the architectural question we explored here:
 
 ```text
-tenant
-  |
-  v
-tenant API endpoint
+shared cluster
+    |
+    +-- Alice and provider use same API
 
-provider management cluster
-  |
-  X tenant has no direct management credentials
+versus
+
+tenant control plane
+    |
+    +-- Alice uses tenant API
+    +-- provider API remains provider-only
 ```
 
-Instead of trying to make a shared provider kube-apiserver appear tenant-owned, the provider can give the tenant a separate API boundary.
+This fourth option can dramatically reduce how much permission engineering has to happen inside the provider cluster.
 
 ---
 
-# 8. Stronger Tenancy Is a Stack of Controls
+# 27. Strong Tenancy Is Still a Stack
+
+Even a separate tenant kube-apiserver does not solve every problem.
 
 For an untrusted external tenant, a design may need something closer to:
 
@@ -558,7 +1607,7 @@ Dedicated or strongly isolated compute
 Tenant network boundary
     |
     +-- NetworkPolicy
-    +-- VPC / VLAN / routing policy as appropriate
+    +-- VPC / VLAN / routing policy
     |
     v
 Tenant storage boundary
@@ -572,15 +1621,12 @@ Provider management plane
     X tenant credentials do not cross this boundary
 ```
 
-The exact implementation varies, but the model is portable.
-
-The mistake to avoid is assuming one control implies all the others.
-
-For example:
+Do not collapse those controls into one mental bucket.
 
 ```text
 RBAC
   != NetworkPolicy
+  != scheduler placement
   != node isolation
   != VM isolation
   != storage isolation
@@ -589,7 +1635,7 @@ RBAC
 
 ---
 
-# 9. A Useful Decision Sequence
+# 28. A Practical Platform Decision Sequence
 
 When designing a platform, ask these questions in order.
 
@@ -621,26 +1667,38 @@ When designing a platform, ask these questions in order.
         +-- they generally should not
 ```
 
-That decision sequence is more useful than starting with a product name.
+Then pick technology.
+
+Do not begin with:
+
+```text
+"We should use vCluster."
+```
+
+Begin with:
+
+```text
+"What boundary are we trying to create?"
+```
 
 ---
 
-# 10. Connect This Back to the Cookbook
+# 29. Connect This Back to the Main Cookbook
 
-Nearly everything in this architecture comes from concepts we already learned.
+Nearly everything in this appendix is built from concepts we already learned.
 
 ```text
 Authentication / RBAC
     -> Chapter 23
 
-SecurityContext
+SecurityContext / Pod security
     -> Chapter 24
 
 NetworkPolicy
     -> Chapter 25
 
 Taints / scheduling eligibility
-    -> scheduling concepts
+    -> scheduling chapters
 
 CRDs
     -> Chapter 33
@@ -652,7 +1710,9 @@ spec / status / reconciliation
     -> Chapter 1 and everywhere else
 ```
 
-Even sophisticated multi-tenant Kubernetes platforms are built from the same recurring idea:
+The platform gets more sophisticated.
+
+The primitive stays familiar:
 
 ```text
 API object
@@ -670,21 +1730,100 @@ lower-level infrastructure
 status
 ```
 
-The abstraction changes.
+A `Deployment` reconciles Pods.
 
-The control loop does not.
+A vCluster syncer reconciles tenant resources into provider resources.
+
+Kamaji reconciles a `TenantControlPlane` into a running Kubernetes control plane.
+
+Cluster API can reconcile a cluster specification into worker machines.
+
+Once the control-loop model is clear, these systems stop looking magical.
 
 ---
 
-# 11. Official References
+# 30. Cleanup the Kamaji Lab
 
-The architecture of these projects evolves, so use their current documentation when making a real platform decision.
+When finished, return to the CKAD context:
 
-- vCluster architecture: https://www.vcluster.com/docs/vcluster/introduction/architecture/
-- vCluster worker-node model: https://www.vcluster.com/docs/vcluster/production-guide/choose-worker-node-model/
-- vCluster syncer: https://www.vcluster.com/docs/vcluster/configure/vcluster-yaml/sync/
-- Kamaji Tenant Control Plane: https://kamaji.clastix.io/concepts/tenant-control-plane/
-- Kamaji Tenant Worker Nodes: https://kamaji.clastix.io/concepts/tenant-worker-nodes/
-- Kubernetes authentication: https://kubernetes.io/docs/reference/access-authn-authz/authentication/
-- Kubernetes RBAC: https://kubernetes.io/docs/reference/access-authn-authz/rbac/
-- Kubernetes authorization: https://kubernetes.io/docs/reference/access-authn-authz/authorization/
+```bash
+kubectl config use-context kind-ckad
+```
+
+Delete the entire Kamaji learning environment:
+
+```bash
+kind delete cluster --name kamaji
+```
+
+Remove the temporary tenant kubeconfig:
+
+```bash
+rm -f /tmp/kamaji-tenant.conf
+```
+
+Your original cookbook cluster remains available.
+
+---
+
+# 31. What You Should Remember
+
+If you retain only a few things from this appendix, make them these:
+
+```text
+RBAC answers:
+"What can this identity do against this Kubernetes API?"
+```
+
+```text
+A separate tenant API answers:
+"Why should this tenant be an administrator of my provider API at all?"
+```
+
+```text
+Separate API servers do not automatically mean separate workers or kernels.
+```
+
+```text
+cluster-admin is relative to a cluster/API boundary.
+```
+
+```text
+control plane exists != worker nodes exist
+```
+
+and:
+
+```text
+a strong tenant boundary is normally a stack of controls,
+not one Kubernetes object or one product.
+```
+
+---
+
+# 32. Official References
+
+These projects evolve quickly. The commands and architecture above were aligned with their current documentation when this appendix was written; use current upstream docs when making a real platform decision.
+
+## vCluster
+
+- Shared Nodes Quick Start: https://www.vcluster.com/docs/vcluster/quick-start/shared-nodes
+- Architecture: https://www.vcluster.com/docs/vcluster/introduction/architecture/
+- Access and ServiceAccount kubeconfigs: https://www.vcluster.com/docs/vcluster/manage/accessing-vcluster
+- Shared-node hardening: https://www.vcluster.com/docs/vcluster/security/shared-nodes-hardening
+- Private Nodes Quick Start: https://www.vcluster.com/docs/vcluster/quick-start/private-nodes
+
+## Kamaji
+
+- Kamaji on kind: https://kamaji.clastix.io/getting-started/kamaji-kind/
+- Tenant Control Plane concepts: https://kamaji.clastix.io/concepts/tenant-control-plane/
+- Generic infrastructure / joining workers: https://kamaji.clastix.io/getting-started/kamaji-generic/
+- API reference: https://kamaji.clastix.io/reference/api/
+- Kubeconfig generation: https://kamaji.clastix.io/guides/kubeconfig-generator/
+
+## Kubernetes
+
+- Authentication: https://kubernetes.io/docs/reference/access-authn-authz/authentication/
+- RBAC: https://kubernetes.io/docs/reference/access-authn-authz/rbac/
+- Authorization: https://kubernetes.io/docs/reference/access-authn-authz/authorization/
+- NetworkPolicy: https://kubernetes.io/docs/concepts/services-networking/network-policies/

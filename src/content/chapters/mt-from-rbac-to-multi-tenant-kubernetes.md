@@ -10,4 +10,20 @@ It is now:
 
 This is platform-engineering material, not CKAD material.
 
-The goal is not to memorise vCluster or Kamaji commands. It is to understand the architectural problem they solve and which security boundaries they do **not** replace.
+The goal is **not** to memorise product-specific commands. We will use ordinary RBAC, vCluster and Kamaji as hands-on experiments to make API, control-plane and worker isolation concrete.
+
+By the end we will have built three different models:
+
+```text
+one shared API
+    + namespace RBAC
+
+separate tenant API
+    + shared workers
+
+separate tenant API
+    + hosted control plane
+    + independently joined workers
+```
+
+The vCluster lab assumes you are continuing from the cookbook's existing `kind-ckad` cluster. The Kamaji lab deliberately creates a second kind cluster so that experimentation does not disturb the CKAD environment.
