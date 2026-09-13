@@ -102,7 +102,17 @@ genuinely different kinds of block:
 | ` ```text ` otherwise | expected output; quiet, clearly not something you type |
 
 Listings over 40 lines fold, with a *Show all N lines* control — the Go controller
-in chapter 34 is 203 lines and would otherwise bury the prose explaining it.
+in chapter 34 is 203 lines and would otherwise bury the prose explaining it. The
+control is **in flow beneath the code, never absolutely positioned over it**;
+position it over the block and it hides the last two lines in both states.
+
+Copying goes through `src/lib/clipboard.ts`, not `navigator.clipboard` directly.
+That API is undefined outside a secure context (any dev server reached over the
+LAN rather than localhost) and rejects with `NotAllowedError` when the document
+is unfocused or permission is refused — so it falls back to `execCommand`, and
+restores the reader's text selection afterwards. The button reports failure
+rather than doing nothing, and is visible at rest: an invisible 28px target
+cannot be hit on touch, and missing it double-clicks the code underneath.
 
 Highlighting is `src/lib/highlight.ts` — about a hundred and fifty lines for shell,
 YAML and Go. Shiki would have been a megabyte to colour `kubectl get pods`.

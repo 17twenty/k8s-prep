@@ -211,3 +211,45 @@ Only 2 ids moved (ch26 and ch34 renamed upstream).
 
 NOTE: the user runs `npm run sync`/`content` themselves and commits — don't assume
 `git show HEAD:content/...` is the previous sync state when diffing.
+- 2026-09-13T16:15:28+10:00 ## k8s-prep — two code-block bugs found by the user (don't reintroduce)
+
+### 1. Fold control must be in flow, not absolutely positioned
+`<Fold>` in `src/components/code.tsx` originally had the "Show all N lines" /
+"Collapse" button as `absolute inset-x-0 bottom-0` inside the same `relative`
+wrapper as the code. It therefore sat **on top of** the listing and hid the last
+~2 lines — invisible when collapsed (the fade masked it) but obvious when
+expanded, which is how the user spotted it.
+
+Correct structure:
+```
+<div>
+  <div class="relative">          <- clipping + fade belong to the CODE
+    <div class={!open && 'max-h-[28rem] overflow-hidden'}>{children}</div>
+    {!open && <fade/>}
+  </div>
+  <button class="block w-full border-t ..." aria-expanded={open}/>   <- IN FLOW
+</div>
+```
+Audited all 155 chapters afterwards (expand every fold, then for each `pre` check
+the last line via `elementFromPoint` + ancestor overflow): zero clipped blocks.
+Keep that audit approach — screenshots kept framing the wrong fold.
+
+### 2. Clipboard: never call `navigator.clipboard.writeText` directly
+It threw `NotAllowedError: Write permission denied` and the call had **no
+`.catch()`**, so the copy silently did nothing — no copy, no feedback, button
+never changed. `navigator.clipboard` is also `undefined` outside a secure context
+(dev server reached on a LAN IP instead of localhost).
+
+Now `src/lib/clipboard.ts` exports `copyText(text): Promise<boolean>`:
+try `navigator.clipboard.writeText` → on throw/absence fall back to a hidden
+`<textarea>` + `document.execCommand('copy')` → **save and restore the reader's
+selection** (execCommand hijacks it) → return success.
+
+`CopyButton` now has three states (idle/copied/failed) and shows an X on failure
+rather than doing nothing. It is **visible at rest (`opacity-60`)**, not
+`opacity-0`-until-hover: a 28px invisible target is unhittable on touch, and
+aiming at it and missing double-clicks/selects the code underneath — which is
+exactly the symptom the user reported.
+
+Verified copied text excludes the decorative `$` prompt spans, preserves `\`
+continuations, and a folded 203-line block still copies all 203 lines.

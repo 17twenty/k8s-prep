@@ -1,5 +1,5 @@
 import { cn } from "cn";
-import { Check, Copy } from "lucide-react";
+import { Check, Copy, X } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import {
   highlight,
@@ -8,6 +8,7 @@ import {
   promptLines,
   type Token,
 } from "@/lib/highlight";
+import { copyText } from "@/lib/clipboard";
 
 const tokenClass: Record<Token["kind"], string> = {
   plain: "",
@@ -22,27 +23,38 @@ const tokenClass: Record<Token["kind"], string> = {
 };
 
 function CopyButton({ value }: { value: string }) {
-  const [copied, setCopied] = useState(false);
+  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+
   return (
     <button
       type="button"
-      onClick={() => {
-        navigator.clipboard.writeText(value).then(() => {
-          setCopied(true);
-          setTimeout(() => setCopied(false), 1600);
-        });
+      onClick={async () => {
+        const ok = await copyText(value);
+        setState(ok ? "copied" : "failed");
+        setTimeout(() => setState("idle"), ok ? 1600 : 2600);
       }}
-      aria-label={copied ? "Copied" : "Copy to clipboard"}
+      aria-label={
+        state === "copied"
+          ? "Copied"
+          : state === "failed"
+            ? "Copy failed \u2014 select the text manually"
+            : "Copy to clipboard"
+      }
       className={cn(
-        "absolute top-2 right-2 inline-flex size-7 items-center justify-center border transition-all",
-        "opacity-0 focus-visible:opacity-100 group-hover/code:opacity-100",
-        copied
-          ? "border-signal bg-signal text-ink opacity-100"
-          : "border-rule bg-sheet text-ink-2 hover:border-ink hover:text-ink",
+        "absolute top-2 right-2 z-20 inline-flex size-7 items-center justify-center border transition-all select-none",
+        // Visible at rest. An invisible 28px target cannot be hit on touch, and
+        // aiming for it and missing double-clicks the code underneath instead.
+        state === "copied"
+          ? "border-signal bg-signal text-ink"
+          : state === "failed"
+            ? "border-destructive bg-sheet text-destructive"
+            : "border-rule bg-sheet text-ink-3 opacity-60 group-hover/code:opacity-100 hover:border-ink hover:text-ink focus-visible:opacity-100",
       )}
     >
-      {copied ? (
+      {state === "copied" ? (
         <Check className="size-3.5" strokeWidth={3} />
+      ) : state === "failed" ? (
+        <X className="size-3.5" strokeWidth={2.5} />
       ) : (
         <Copy className="size-3.5" />
       )}
@@ -100,20 +112,25 @@ function Fold({ lines, children }: { lines: number; children: ReactNode }) {
   if (lines <= FOLD_OVER) return <>{children}</>;
 
   return (
-    <div className="relative">
-      <div className={cn("overflow-hidden", !open && "max-h-[28rem]")}>
-        {children}
+    <div>
+      {/* The clipping and the fade belong to the code, the control does not —
+          position the button in flow or it sits on top of the last lines. */}
+      <div className="relative">
+        <div className={cn(!open && "max-h-[28rem] overflow-hidden")}>
+          {children}
+        </div>
+        {!open && (
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-sheet to-transparent"
+          />
+        )}
       </div>
-      {!open && (
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-sheet to-transparent"
-        />
-      )}
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="type-label absolute inset-x-0 bottom-0 border-t border-rule bg-sheet py-2.5 text-ink-2 transition-colors hover:bg-paper hover:text-ink"
+        aria-expanded={open}
+        className="type-label block w-full border-t border-rule bg-sheet py-2.5 text-ink-2 transition-colors hover:bg-paper hover:text-ink"
       >
         {open ? "Collapse" : `Show all ${lines} lines`}
       </button>
