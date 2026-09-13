@@ -96,13 +96,21 @@ genuinely different kinds of block:
 
 | Fence | Rendered as |
 | --- | --- |
-| ` ```bash ` | shell transcript, with a `$` worked out per *logical* command (backslash continuations and heredocs get no prompt) |
-| ` ```yaml ` | manifest sheet with line numbers |
+| ` ```bash `, `sh`, `shell`, `zsh`, `console` | shell transcript, with a `$` worked out per *logical* command (backslash continuations and heredocs get no prompt) |
+| ` ```yaml `, `go`, `json`, `dockerfile`, `toml` | listing: line numbers, a language tab, `tab-size: 2` |
 | ` ```text ` containing `\|`, `v`, `+--` | **figure** — the ASCII diagrams are the best thing in here, so they are plate-mounted on chart paper |
 | ` ```text ` otherwise | expected output; quiet, clearly not something you type |
 
-Highlighting is `src/lib/highlight.ts` — about a hundred lines for shell and YAML.
-Shiki would have been a megabyte to colour `kubectl get pods`.
+Listings over 40 lines fold, with a *Show all N lines* control — the Go controller
+in chapter 34 is 203 lines and would otherwise bury the prose explaining it.
+
+Highlighting is `src/lib/highlight.ts` — about a hundred and fifty lines for shell,
+YAML and Go. Shiki would have been a megabyte to colour `kubectl get pods`.
+
+Adding a language means adding a regex there and a set membership in
+`code.tsx` (`LISTINGS`) or `highlight.ts` (`SHELLS`) — two lines. Anything
+unrecognised still renders safely as output or, if it is drawn with `|` and
+`+--`, as a figure.
 
 ## Where things are
 

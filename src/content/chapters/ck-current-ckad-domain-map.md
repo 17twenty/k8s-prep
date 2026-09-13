@@ -62,3 +62,7 @@ Covered by:
 - network troubleshooting
 - NetworkPolicy
 - Ingress
+
+Supplemental deep dive:
+
+- Gateway API concepts and hands-on Cilium Gateway API in `cillium-gateay-appendix.md`

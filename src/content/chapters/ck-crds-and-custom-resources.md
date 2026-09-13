@@ -15,7 +15,7 @@ For example:
 ```yaml
 kind: PreviewEnvironment
 spec:
-  image: shop:pr-482
+  image: nginx:1.27-alpine
   replicas: 2
 ```
 
@@ -47,6 +47,10 @@ spec:
     - name: v1alpha1
       served: true
       storage: true
+
+      subresources:
+        status: {}
+
       schema:
         openAPIV3Schema:
           type: object
@@ -62,6 +66,14 @@ spec:
               required:
                 - image
                 - replicas
+
+            status:
+              type: object
+              properties:
+                readyReplicas:
+                  type: integer
+                url:
+                  type: string
 ```
 
 Apply:
@@ -81,9 +93,12 @@ Ask for its schema:
 ```bash
 kubectl explain previewenvironments
 kubectl explain previewenvironments.spec
+kubectl explain previewenvironments.status
 ```
 
 The CRD extended API discovery just like a built-in type.
+
+The `status` subresource also gives a future controller somewhere separate to report observed state without pretending that status is user intent.
 
 ## Create a Custom Resource
 
@@ -95,7 +110,7 @@ kind: PreviewEnvironment
 metadata:
   name: pr-482
 spec:
-  image: ghcr.io/example/shop:pr-482
+  image: nginx:1.27-alpine
   replicas: 2
 ```
 
@@ -146,3 +161,7 @@ Nothing implements its behaviour
 This distinction is fundamental:
 
 > A CRD extends the API. It does not, by itself, implement a control loop.
+
+Leave `preview-crd.yaml` and `preview.yaml` in place.
+
+The next chapter gives them behaviour.

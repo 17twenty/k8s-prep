@@ -3330,6 +3330,14 @@ rm -f multi.yaml
 
 Different supporting containers solve different lifecycle problems.
 
+The useful question is not:
+
+> How many containers can a Pod contain?
+
+It is:
+
+> What lifecycle relationship does this supporting process have with the application?
+
 ## Init container: do work before the application starts
 
 Use an init container when setup must complete successfully before normal application containers begin.
@@ -3399,6 +3407,15 @@ init container completes
 application container starts
 ```
 
+Inspect the separate status lists:
+
+```bash
+kubectl get pod init-demo \
+  -o jsonpath='{range .status.initContainerStatuses[*]}init:{.name}={.state.terminated.reason}{"\n"}{end}{range .status.containerStatuses[*]}app:{.name}={.state.running.startedAt}{"\n"}{end}'
+```
+
+The init container terminated successfully before nginx began its normal lifetime.
+
 Cleanup:
 
 ```bash
@@ -3406,17 +3423,27 @@ kubectl delete pod init-demo
 rm -f init-demo.yaml
 ```
 
-## Native sidecar: supporting process for the Pod lifetime
+## Native sidecar: start in init ordering, then stay alive
 
-Modern Kubernetes implements native sidecars as restartable init containers using:
+Native sidecars are restartable init containers.
+
+They use:
 
 ```yaml
 restartPolicy: Always
 ```
 
-Example fragment:
+Unlike an ordinary init container, the sidecar does not need to finish before the application can keep running.
+
+Let's prove that.
+
+Save as `sidecar-demo.yaml`:
 
 ```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: sidecar-demo
 spec:
   initContainers:
     - name: log-forwarder
@@ -3425,23 +3452,75 @@ spec:
       command:
         - sh
         - -c
-        - tail -F /logs/app.log
+        - |
+          touch /logs/app.log
+          tail -F /logs/app.log
+      volumeMounts:
+        - name: logs
+          mountPath: /logs
+
+  containers:
+    - name: app
+      image: busybox:1.36
+      command:
+        - sh
+        - -c
+        - |
+          i=0
+          while true; do
+            i=$((i + 1))
+            echo "application message $i" >> /logs/app.log
+            sleep 2
+          done
+      volumeMounts:
+        - name: logs
+          mountPath: /logs
+
+  volumes:
+    - name: logs
+      emptyDir: {}
 ```
 
-The important lifecycle difference is:
+Apply and wait:
+
+```bash
+kubectl apply -f sidecar-demo.yaml
+kubectl wait \
+  --for=condition=Ready \
+  pod/sidecar-demo \
+  --timeout=60s
+```
+
+Now read the sidecar logs:
+
+```bash
+kubectl logs sidecar-demo \
+  -c log-forwarder \
+  --tail=5
+```
+
+You should see the application messages even though the log-forwarder was declared under `initContainers`.
+
+Inspect its state:
+
+```bash
+kubectl get pod sidecar-demo \
+  -o jsonpath='{range .status.initContainerStatuses[*]}{.name}{" running="}{.state.running.startedAt}{" restarts="}{.restartCount}{"\n"}{end}'
+```
+
+The slightly surprising result is:
 
 ```text
-regular init container
-    -> starts
-    -> completes
-    -> application can continue
-
-native sidecar
-    -> starts in init ordering
-    -> remains running with the Pod
+spec.initContainers
+        |
+        +-- ordinary init container -> eventually terminates
+        |
+        +-- restartPolicy: Always   -> remains running as a sidecar
 ```
 
-Good sidecar examples include:
+That is why native sidecars can participate in init ordering while still living for the Pod lifetime.
+
+Good uses include:
 
 - log forwarding
 - local proxying
@@ -3451,6 +3530,13 @@ Good sidecar examples include:
 Use a sidecar when the supporting functionality genuinely belongs to the same Pod lifecycle.
 
 Do not group unrelated services into one Pod merely because Kubernetes allows multiple containers.
+
+Cleanup:
+
+```bash
+kubectl delete pod sidecar-demo
+rm -f sidecar-demo.yaml
+```
 
 ---
 
@@ -4651,6 +4737,74 @@ Container runtime security should be part of the workload definition rather than
 
 A `securityContext` can exist at Pod level and container level.
 
+Before building a secure Pod, deliberately ask Kubernetes for an impossible combination.
+
+## Break it: require non-root without choosing a non-root user
+
+Save as `root-forbidden.yaml`:
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: root-forbidden
+spec:
+  securityContext:
+    runAsNonRoot: true
+
+  containers:
+    - name: shell
+      image: busybox:1.36
+      command: ["sh", "-c", "sleep 3600"]
+```
+
+Apply:
+
+```bash
+kubectl apply -f root-forbidden.yaml
+```
+
+Inspect:
+
+```bash
+kubectl get pod root-forbidden
+kubectl describe pod root-forbidden
+```
+
+The image normally runs as UID `0`, but the Pod says that root is forbidden.
+
+The kubelet therefore cannot construct the requested container safely.
+
+You should see a failure such as:
+
+```text
+CreateContainerConfigError
+```
+
+with an Event explaining that `runAsNonRoot` conflicts with a root runtime identity.
+
+This is a useful distinction:
+
+```text
+image says
+run as root
+    |
+    X
+Pod securityContext says
+must not run as root
+```
+
+Kubernetes did not silently weaken the requested security policy to make the container start.
+
+Delete the failed Pod:
+
+```bash
+kubectl delete pod root-forbidden
+rm -f root-forbidden.yaml
+```
+
+## Fix it: choose the runtime identity deliberately
+
 Save as `secure-demo.yaml`:
 
 ```yaml
@@ -4661,6 +4815,8 @@ metadata:
 spec:
   securityContext:
     runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
 
   containers:
     - name: shell
@@ -4669,15 +4825,20 @@ spec:
       securityContext:
         runAsUser: 10001
         allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
         capabilities:
           drop:
             - ALL
 ```
 
-Apply:
+Apply and wait:
 
 ```bash
 kubectl apply -f secure-demo.yaml
+kubectl wait \
+  --for=condition=Ready \
+  pod/secure-demo \
+  --timeout=60s
 ```
 
 Inspect identity:
@@ -4686,11 +4847,22 @@ Inspect identity:
 kubectl exec secure-demo -- id
 ```
 
-Inspect the configured container security context:
+You should see UID `10001` rather than root.
+
+Prove the root filesystem is read-only:
+
+```bash
+kubectl exec secure-demo -- \
+  sh -c 'touch /tmp/should-fail'
+```
+
+The write should fail.
+
+Inspect the configured controls:
 
 ```bash
 kubectl get pod secure-demo \
-  -o jsonpath='{.spec.containers[0].securityContext}{"\n"}'
+  -o jsonpath='{.spec.securityContext}{"\n"}{.spec.containers[0].securityContext}{"\n"}'
 ```
 
 Useful controls include:
@@ -4714,6 +4886,9 @@ For example:
 runAsNonRoot
     -> refuse a root runtime identity
 
+runAsUser
+    -> choose a numeric runtime UID
+
 allowPrivilegeEscalation: false
     -> process cannot gain more privileges than its parent
 
@@ -4722,6 +4897,22 @@ capabilities.drop
 
 readOnlyRootFilesystem
     -> make the container root filesystem read-only
+
+seccompProfile: RuntimeDefault
+    -> apply the runtime's default syscall filter
+```
+
+The broader lesson is the same as elsewhere in Kubernetes:
+
+```text
+security intent in spec
+        |
+        v
+runtime tries to satisfy it
+        |
+        +-- possible   -> container runs
+        |
+        +-- impossible -> visible failure
 ```
 
 Cleanup:
@@ -4853,27 +5044,47 @@ rm -f deny-api.yaml allow-api.yaml
 
 ---
 
-# 26. Ingress: HTTP Routing Into the Cluster [CKAD]
+# 26. Ingress: The Frozen HTTP API and the Road to Gateway API [CKAD] [DEV]
 
 A ClusterIP Service gives an application a stable endpoint inside the cluster.
 
 Users outside the cluster often need HTTP routing to that Service.
 
-Ingress describes HTTP and HTTPS routing rules.
+Historically, Kubernetes modelled that with `Ingress`.
 
-An important distinction:
+An important distinction is:
 
 > An Ingress object is configuration. An Ingress controller is the software that implements it.
 
-## Check whether the cluster has an IngressClass
+That distinction is worth observing directly.
+
+## Check whether anything implements Ingress
+
+Ask the cluster for its available implementations:
 
 ```bash
 kubectl get ingressclass
 ```
 
-If there is no Ingress controller, you can still study and create the API object, but traffic will not be routed.
+A stock kind cluster may return no classes at all.
 
-## Create an Ingress rule
+That means the API server understands `Ingress`, but nothing is currently responsible for turning those objects into working HTTP listeners.
+
+This is the same pattern we will later see with CRDs and controllers:
+
+```text
+API object exists
+      |
+      v
+controller watches it
+      |
+      v
+real behaviour appears
+```
+
+No controller means the middle step is missing.
+
+## Create the API object anyway
 
 Save as `ingress.yaml`:
 
@@ -4896,13 +5107,6 @@ spec:
                   number: 80
 ```
 
-If your cluster requires a particular class, add:
-
-```yaml
-spec:
-  ingressClassName: <class-name>
-```
-
 Apply:
 
 ```bash
@@ -4916,7 +5120,33 @@ kubectl get ingress api
 kubectl describe ingress api
 ```
 
-The routing model is:
+Inspect status directly:
+
+```bash
+kubectl get ingress api \
+  -o jsonpath='{.status.loadBalancer.ingress}{"\n"}'
+```
+
+If there is no controller, that status will normally remain empty and no HTTP listener will magically appear.
+
+That is useful behaviour to understand:
+
+```text
+Ingress stored in API       yes
+routing implementation      no
+external traffic path       no
+```
+
+If your cluster already has a maintained Ingress controller, set the matching class:
+
+```yaml
+spec:
+  ingressClassName: <class-name>
+```
+
+and follow that controller's documented exposure method.
+
+The abstract path is still:
 
 ```text
 HTTP request
@@ -4932,9 +5162,55 @@ Service
 ready backend Pods
 ```
 
-Notice how Ingress does not replace a Service.
+Ingress does not replace a Service.
 
-It usually routes **to** one.
+It routes to one.
+
+## Why we do not install an Ingress controller just for this lab
+
+The Kubernetes project now recommends **Gateway API** instead of Ingress.
+
+Ingress remains a stable API and is not being removed, but the API is frozen and no longer gaining features.
+
+Also avoid old tutorials that tell you to install `ingress-nginx`: that project was retired in March 2026 and no longer receives fixes or security updates.
+
+So the main cookbook keeps Ingress because it is still important Kubernetes and CKAD knowledge, but we do not introduce a legacy controller merely to make this one exercise route traffic.
+
+Instead, the networking deep dive takes the modern path.
+
+Continue with `cillium-gateay-appendix.md`, where we actually install and exercise Cilium's Gateway API implementation:
+
+```text
+GatewayClass
+     |
+     v
+Gateway
+     |
+     v
+HTTPRoute
+     |
+     v
+Service
+     |
+     v
+Pod
+```
+
+That appendix sends real traffic, breaks backend references, inspects status, exercises header routing, weighted backends, cross-namespace `ReferenceGrant`, and follows the implementation down through Envoy, Cilium and eBPF.
+
+The important progression is:
+
+```text
+Ingress
+  -> simple, stable, frozen HTTP routing API
+
+Gateway API
+  -> role-oriented, extensible service-networking APIs
+```
+
+For a broader tour of the Gateway API resource model and its routing features, Roman Glushko's deep dive is also excellent:
+
+https://www.romaglushko.com/blog/k8s-gateway-api/
 
 Cleanup:
 
@@ -5528,28 +5804,103 @@ That is often desirable.
 
 A production image does not need a complete incident-response toolbox merely to make debugging convenient.
 
-When `kubectl exec` is insufficient, Kubernetes can add an ephemeral debugging container to an existing Pod.
+Let's hit that problem before solving it.
+
+## First try ordinary `exec`
 
 Pick one API Pod:
 
 ```bash
 POD=$(kubectl get pod -l app=api \
   -o jsonpath='{.items[0].metadata.name}')
+
+CONTAINER=$(kubectl get pod "$POD" \
+  -o jsonpath='{.spec.containers[0].name}')
+
+printf 'pod=%s container=%s\n' "$POD" "$CONTAINER"
 ```
 
-Start a debug container:
+Try to use `curl` inside the application container:
+
+```bash
+kubectl exec "$POD" -c "$CONTAINER" -- \
+  curl -s http://127.0.0.1
+```
+
+Our nginx-based image does not normally contain `curl`, so the command should fail with an executable-not-found error.
+
+That is not necessarily an image defect.
+
+It can be a deliberate production-image choice.
+
+## Add temporary tooling instead
+
+Attach an ephemeral debugging container:
 
 ```bash
 kubectl debug -it "$POD" \
   --image=busybox:1.36 \
-  --target=nginx
+  --target="$CONTAINER" \
+  -- sh
 ```
 
-This gives you debugging utilities without permanently changing the production application image.
+Inside the debug container, call the application over the Pod's shared network namespace:
 
-Depending on runtime and security configuration, process visibility and debugging capabilities can differ.
+```sh
+wget -qO- http://127.0.0.1
+```
 
-The conceptual point is:
+You can also inspect processes:
+
+```sh
+ps
+```
+
+Then exit:
+
+```sh
+exit
+```
+
+Inspect what Kubernetes added:
+
+```bash
+kubectl get pod "$POD" \
+  -o jsonpath='{range .spec.ephemeralContainers[*]}{.name}{" image="}{.image}{" target="}{.targetContainerName}{"\n"}{end}'
+```
+
+The original application image did not change.
+
+The Pod now has temporary debugging tooling attached to it.
+
+Conceptually:
+
+```text
+minimal production container
+        |
+        | exec lacks tooling
+        v
+   debugging blocked
+        |
+        | kubectl debug
+        v
+ephemeral container joins Pod
+        |
+        +-- same Pod network
+        +-- optional process targeting
+        +-- extra tools
+```
+
+Ephemeral containers are intentionally different from normal application containers:
+
+- they are added to an existing Pod for troubleshooting
+- they are not part of the normal workload template
+- they do not restart like ordinary workload containers
+- they cannot define normal container resources such as ports or probes
+
+Depending on the runtime and security configuration, process visibility and debugging capabilities can differ.
+
+The model to keep is:
 
 ```text
 production container stays minimal
@@ -5586,7 +5937,7 @@ For example:
 ```yaml
 kind: PreviewEnvironment
 spec:
-  image: shop:pr-482
+  image: nginx:1.27-alpine
   replicas: 2
 ```
 
@@ -5618,6 +5969,10 @@ spec:
     - name: v1alpha1
       served: true
       storage: true
+
+      subresources:
+        status: {}
+
       schema:
         openAPIV3Schema:
           type: object
@@ -5633,6 +5988,14 @@ spec:
               required:
                 - image
                 - replicas
+
+            status:
+              type: object
+              properties:
+                readyReplicas:
+                  type: integer
+                url:
+                  type: string
 ```
 
 Apply:
@@ -5652,9 +6015,12 @@ Ask for its schema:
 ```bash
 kubectl explain previewenvironments
 kubectl explain previewenvironments.spec
+kubectl explain previewenvironments.status
 ```
 
 The CRD extended API discovery just like a built-in type.
+
+The `status` subresource also gives a future controller somewhere separate to report observed state without pretending that status is user intent.
 
 ## Create a Custom Resource
 
@@ -5666,7 +6032,7 @@ kind: PreviewEnvironment
 metadata:
   name: pr-482
 spec:
-  image: ghcr.io/example/shop:pr-482
+  image: nginx:1.27-alpine
   replicas: 2
 ```
 
@@ -5718,81 +6084,705 @@ This distinction is fundamental:
 
 > A CRD extends the API. It does not, by itself, implement a control loop.
 
+Leave `preview-crd.yaml` and `preview.yaml` in place.
+
+The next chapter gives them behaviour.
+
 ---
 
-# 34. Custom Controllers: Turn an API Into Behaviour [DEV] [DEEP DIVE]
+# 34. Build a Tiny Go Controller [DEV] [DEEP DIVE]
 
-Suppose we want this:
+Chapter 1 told us that Kubernetes is a control system.
+
+Now we are going to write one of those control loops ourselves.
+
+Our custom API says:
 
 ```yaml
 kind: PreviewEnvironment
 spec:
-  image: shop:pr-482
+  image: nginx:1.27-alpine
   replicas: 2
 ```
 
-to result in:
+We want that to cause:
 
 ```text
-Deployment
-Service
+PreviewEnvironment
+       |
+       +-- Deployment
+       |
+       +-- Service
 ```
 
-We need a controller.
+and we want the custom resource to report:
 
-Conceptually:
+```yaml
+status:
+  readyReplicas: 2
+  url: http://pr-482.cookbook.svc.cluster.local
+```
+
+That requires a controller.
+
+## The smallest useful reconciliation loop
+
+A production controller normally uses watches, informers, a work queue, retries and often leader election.
+
+We are deliberately starting with something smaller:
 
 ```text
-Developer
-   |
-   | kubectl apply
-   v
-Kubernetes API
-   |
-   | PreviewEnvironment/pr-482
-   v
-Preview controller
-   |
-   +-- Deployment
-   |
-   +-- Service
+every 2 seconds
+     |
+     v
+list PreviewEnvironments
+     |
+     v
+for each one
+     |
+     +-- apply desired Deployment
+     +-- apply desired Service
+     +-- read observed Deployment status
+     +-- update PreviewEnvironment status
 ```
 
-The controller repeatedly reconciles desired state.
+Polling is not the architecture we would choose for a serious controller.
 
-Pseudo-code:
+It is useful here because the reconciliation logic stays visible.
+
+The controller uses **server-side apply** for its child resources. Re-running the same desired definition therefore converges instead of creating another Deployment every loop.
+
+## Create the Go project
+
+You need Go installed for this deep dive.
+
+Check:
+
+```bash
+go version
+```
+
+Create a workspace:
+
+```bash
+mkdir -p /tmp/preview-controller
+cd /tmp/preview-controller
+
+go mod init example.com/preview-controller
+
+go get \
+  k8s.io/apimachinery@v0.35.0 \
+  k8s.io/client-go@v0.35.0
+```
+
+`client-go` uses matching `v0.X.Y` versions for Kubernetes `v1.X.Y` releases, so `v0.35.0` aligns with our Kubernetes 1.35 target.
+
+Save as `main.go`:
 
 ```go
-func Reconcile(name string) {
-    desired := readPreviewEnvironment(name)
-    actual := inspectCurrentResources(name)
+package main
 
-    reconcileDeployment(desired, actual)
-    reconcileService(desired, actual)
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"os"
+	"time"
 
-    updateStatus()
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
+)
+
+var (
+	previewGVR = schema.GroupVersionResource{Group: "platform.example.com", Version: "v1alpha1", Resource: "previewenvironments"}
+	deployGVR  = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
+	serviceGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "services"}
+)
+
+type controller struct {
+	namespace string
+	client    dynamic.Interface
+}
+
+func main() {
+	cfg, err := kubeConfig()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	client, err := dynamic.NewForConfig(cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	namespace := os.Getenv("NAMESPACE")
+	if namespace == "" {
+		namespace = "cookbook"
+	}
+
+	c := &controller{namespace: namespace, client: client}
+	ctx := context.Background()
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	log.Printf("reconciling PreviewEnvironments in %q", namespace)
+
+	for {
+		if err := c.reconcileAll(ctx); err != nil {
+			log.Printf("reconcile: %v", err)
+		}
+		<-ticker.C
+	}
+}
+
+func kubeConfig() (*rest.Config, error) {
+	if cfg, err := rest.InClusterConfig(); err == nil {
+		return cfg, nil
+	}
+
+	return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+		clientcmd.NewDefaultClientConfigLoadingRules(),
+		&clientcmd.ConfigOverrides{},
+	).ClientConfig()
+}
+
+func (c *controller) reconcileAll(ctx context.Context) error {
+	previews := c.client.Resource(previewGVR).Namespace(c.namespace)
+	list, err := previews.List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return err
+	}
+
+	for i := range list.Items {
+		preview := &list.Items[i]
+		if preview.GetDeletionTimestamp() != nil {
+			continue
+		}
+		if err := c.reconcile(ctx, preview); err != nil {
+			log.Printf("%s: %v", preview.GetName(), err)
+		}
+	}
+	return nil
+}
+
+func (c *controller) reconcile(ctx context.Context, preview *unstructured.Unstructured) error {
+	name := preview.GetName()
+	image, _, _ := unstructured.NestedString(preview.Object, "spec", "image")
+	replicas, _, _ := unstructured.NestedInt64(preview.Object, "spec", "replicas")
+	if image == "" || replicas < 1 {
+		return fmt.Errorf("spec.image and spec.replicas are required")
+	}
+
+	labels := map[string]any{
+		"app.kubernetes.io/name":       name,
+		"platform.example.com/preview": name,
+	}
+	owner := []any{map[string]any{
+		"apiVersion": "platform.example.com/v1alpha1",
+		"kind":       "PreviewEnvironment",
+		"name":       name,
+		"uid":        string(preview.GetUID()),
+		"controller": true,
+	}}
+
+	deployment := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "apps/v1",
+		"kind":       "Deployment",
+		"metadata": map[string]any{
+			"name":            name,
+			"namespace":       c.namespace,
+			"ownerReferences": owner,
+		},
+		"spec": map[string]any{
+			"replicas": replicas,
+			"selector": map[string]any{"matchLabels": labels},
+			"template": map[string]any{
+				"metadata": map[string]any{"labels": labels},
+				"spec": map[string]any{
+					"containers": []any{map[string]any{
+						"name":  "web",
+						"image": image,
+						"ports": []any{map[string]any{"containerPort": int64(80)}},
+					}},
+				},
+			},
+		},
+	}}
+
+	service := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1",
+		"kind":       "Service",
+		"metadata": map[string]any{
+			"name":            name,
+			"namespace":       c.namespace,
+			"ownerReferences": owner,
+		},
+		"spec": map[string]any{
+			"selector": labels,
+			"ports": []any{map[string]any{
+				"name":       "http",
+				"port":       int64(80),
+				"targetPort": int64(80),
+			}},
+		},
+	}}
+
+	if err := c.apply(ctx, deployGVR, deployment); err != nil {
+		return err
+	}
+	if err := c.apply(ctx, serviceGVR, service); err != nil {
+		return err
+	}
+
+	current, err := c.client.Resource(deployGVR).Namespace(c.namespace).
+		Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return err
+	}
+	ready, _, _ := unstructured.NestedInt64(current.Object, "status", "readyReplicas")
+
+	return c.updateStatus(ctx, preview, ready)
+}
+
+func (c *controller) apply(ctx context.Context, gvr schema.GroupVersionResource, obj *unstructured.Unstructured) error {
+	body, err := json.Marshal(obj.Object)
+	if err != nil {
+		return err
+	}
+
+	force := true
+	_, err = c.client.Resource(gvr).Namespace(c.namespace).Patch(
+		ctx,
+		obj.GetName(),
+		types.ApplyPatchType,
+		body,
+		metav1.PatchOptions{FieldManager: "preview-controller", Force: &force},
+	)
+	return err
+}
+
+func (c *controller) updateStatus(ctx context.Context, preview *unstructured.Unstructured, ready int64) error {
+	url := fmt.Sprintf("http://%s.%s.svc.cluster.local", preview.GetName(), c.namespace)
+	oldReady, _, _ := unstructured.NestedInt64(preview.Object, "status", "readyReplicas")
+	oldURL, _, _ := unstructured.NestedString(preview.Object, "status", "url")
+	if oldReady == ready && oldURL == url {
+		return nil
+	}
+
+	updated := preview.DeepCopy()
+	_ = unstructured.SetNestedField(updated.Object, ready, "status", "readyReplicas")
+	_ = unstructured.SetNestedField(updated.Object, url, "status", "url")
+
+	_, err := c.client.Resource(previewGVR).Namespace(c.namespace).
+		UpdateStatus(ctx, updated, metav1.UpdateOptions{})
+	return err
 }
 ```
 
-The important property is **idempotency**.
+Format and resolve dependencies:
 
-Good reconciliation logic says:
-
-```text
-Ensure a Deployment exists with image X and replicas N.
+```bash
+gofmt -w main.go
+go mod tidy
 ```
 
-Bad reconciliation logic says:
+## Run the controller from your laptop first
 
-```text
-Create another Deployment every time reconcile runs.
+The program first tries in-cluster credentials. If it is not running in Kubernetes, it falls back to your normal kubeconfig.
+
+Make sure you are still pointed at the cookbook lab:
+
+```bash
+kubectl config current-context
+kubectl config view --minify \
+  -o jsonpath='{..namespace}{"\n"}'
 ```
 
-A reconcile can happen repeatedly and for reasons your controller did not initiate.
+Then run:
 
-The result should converge.
+```bash
+go run .
+```
 
-This is the same mental model from Chapter 1, now implemented by application-specific code.
+Leave it running.
+
+In another terminal:
+
+```bash
+kubectl get preview,deployment,service,pods
+```
+
+The custom resource from Chapter 33 should now cause a Deployment and Service to appear.
+
+Wait for the child Deployment to be created, then for its rollout:
+
+```bash
+kubectl wait   --for=create   deployment/pr-482   --timeout=30s
+
+kubectl rollout status deployment/pr-482
+```
+
+Then inspect custom status:
+
+```bash
+kubectl get preview pr-482 \
+  -o jsonpath='{.status.readyReplicas}{" ready -> "}{.status.url}{"\n"}'
+```
+
+You should eventually see:
+
+```text
+2 ready -> http://pr-482.cookbook.svc.cluster.local
+```
+
+The path is now real:
+
+```text
+PreviewEnvironment.spec
+        |
+        v
+our Go controller
+        |
+        +-- server-side apply Deployment
+        |
+        +-- server-side apply Service
+        |
+        v
+Deployment.status
+        |
+        v
+PreviewEnvironment.status
+```
+
+## Change desired state
+
+Change the custom resource rather than the generated Deployment:
+
+```bash
+kubectl patch preview pr-482 \
+  --type=merge \
+  -p '{"spec":{"replicas":3}}'
+```
+
+Watch:
+
+```bash
+kubectl get preview,deployment,pods -w
+```
+
+The controller sees the new desired state and changes the Deployment.
+
+## Create drift on purpose
+
+Now fight the controller.
+
+Scale its child Deployment directly:
+
+```bash
+kubectl scale deployment pr-482 --replicas=1
+```
+
+Check immediately:
+
+```bash
+kubectl get deployment pr-482
+```
+
+Then check again a few seconds later:
+
+```bash
+sleep 3
+kubectl get deployment pr-482
+```
+
+It should return to three replicas.
+
+Why?
+
+```text
+PreviewEnvironment.spec.replicas = 3
+              |
+              v
+controller observes child replicas = 1
+              |
+              v
+server-side apply desired Deployment
+              |
+              v
+child replicas = 3
+```
+
+This is Chapter 1's control loop implemented by code we wrote ourselves.
+
+## Delete a child
+
+Delete the generated Deployment:
+
+```bash
+kubectl delete deployment pr-482
+```
+
+Watch the labelled Deployment set rather than asking for the temporarily missing object by name:
+
+```bash
+kubectl get deployment   -l platform.example.com/preview=pr-482   -w
+```
+
+Within a reconciliation cycle, it should reappear.
+
+Again, the controller is not issuing an imperative "restart" command.
+
+It is repeatedly asserting:
+
+```text
+A Deployment named pr-482 should exist with this spec.
+```
+
+Press `Ctrl-C` in the terminal running `go run .` before the next step.
+
+## Run the controller as a Kubernetes workload
+
+Running from your laptop proved the control loop.
+
+Now make the controller obey the same platform rules as every other workload.
+
+Create a `Dockerfile`:
+
+```dockerfile
+FROM golang:1.25-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY main.go ./
+RUN CGO_ENABLED=0 GOOS=linux go build -o /controller .
+
+FROM scratch
+COPY --from=build /controller /controller
+USER 65532:65532
+ENTRYPOINT ["/controller"]
+```
+
+Build it:
+
+```bash
+docker build -t example/preview-controller:v1 .
+```
+
+Our lab is kind, so reuse the image-distribution lesson from Chapter 9:
+
+```bash
+kind load docker-image \
+  example/preview-controller:v1 \
+  --name ckad
+```
+
+## Give it only the API permissions it needs
+
+Save as `controller-rbac.yaml`:
+
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: preview-controller
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: preview-controller
+rules:
+  - apiGroups: ["platform.example.com"]
+    resources:
+      - previewenvironments
+      - previewenvironments/status
+    verbs:
+      - get
+      - list
+      - watch
+      - update
+      - patch
+
+  - apiGroups: ["apps"]
+    resources:
+      - deployments
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+
+  - apiGroups: [""]
+    resources:
+      - services
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: preview-controller
+subjects:
+  - kind: ServiceAccount
+    name: preview-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: preview-controller
+```
+
+Apply:
+
+```bash
+kubectl apply -f controller-rbac.yaml
+```
+
+Prove the scope before running anything:
+
+```bash
+kubectl auth can-i patch deployments \
+  --as=system:serviceaccount:cookbook:preview-controller
+
+kubectl auth can-i update previewenvironments/status \
+  --api-group=platform.example.com \
+  --as=system:serviceaccount:cookbook:preview-controller
+
+kubectl auth can-i delete nodes \
+  --as=system:serviceaccount:cookbook:preview-controller
+```
+
+The first two should be allowed.
+
+Deleting Nodes should not be.
+
+That connects our controller directly back to Chapter 23:
+
+```text
+controller needs API access
+        |
+        v
+ServiceAccount identity
+        |
+        v
+Role grants minimum namespace permissions
+```
+
+## Deploy the controller
+
+Save as `controller-deployment.yaml`:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: preview-controller
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: preview-controller
+
+  template:
+    metadata:
+      labels:
+        app: preview-controller
+
+    spec:
+      serviceAccountName: preview-controller
+
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: controller
+          image: example/preview-controller:v1
+          imagePullPolicy: IfNotPresent
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+
+          env:
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+```
+
+Apply:
+
+```bash
+kubectl apply -f controller-deployment.yaml
+kubectl rollout status deployment/preview-controller
+```
+
+Follow its logs:
+
+```bash
+kubectl logs deployment/preview-controller -f
+```
+
+The controller now uses:
+
+- a ServiceAccount from the RBAC chapter
+- namespace discovery from the Downward API chapter
+- a hardened SecurityContext from Chapter 24
+- a locally built image loaded into kind as in Chapter 9
+- a custom API from Chapter 33
+- server-side apply to express child desired state
+
+This is why the earlier chapters matter.
+
+They compose.
+
+Leave the controller, CRD and `PreviewEnvironment/pr-482` running.
+
+Chapter 35 will inspect the ownership and status relationships we just created.
+
+## What we deliberately left out
+
+Our controller polls every two seconds because that keeps the first implementation understandable.
+
+A production controller normally evolves toward:
+
+```text
+watch / informer
+      |
+      v
+work queue
+      |
+      v
+reconcile(key)
+      |
+      +-- retry with backoff
+      +-- status / conditions
+      +-- metrics
+      +-- leader election when replicated
+```
+
+Libraries such as `client-go` and `controller-runtime` provide those building blocks.
+
+The essential idea does not change:
+
+> Reconciliation should be idempotent. Running it repeatedly should converge the system toward the same desired state, not create more side effects every time.
 
 ---
 
@@ -5804,34 +6794,47 @@ They are not arbitrary advanced features.
 
 They help controllers express responsibility, cleanup and observed state.
 
-## Ownership
+We now have our own controller running, so we can inspect these mechanisms on something we built rather than only discussing them in the abstract.
 
-We already have a live built-in example.
+## Ownership: which object is responsible for this child?
 
-Inspect one Deployment Pod:
+First inspect the Deployment created for our preview:
 
 ```bash
-POD=$(kubectl get pod -l app=api \
-  -o jsonpath='{.items[0].metadata.name}')
-
-kubectl get pod "$POD" \
+kubectl get deployment pr-482 \
   -o jsonpath='{.metadata.ownerReferences}{"\n"}'
 ```
 
-The Pod is owned by a ReplicaSet.
-
-Inspect the ReplicaSet:
+Then the Service:
 
 ```bash
-RS=$(kubectl get rs -l app=api \
-  --sort-by=.metadata.creationTimestamp \
-  -o jsonpath='{.items[-1:].metadata.name}')
-
-kubectl get rs "$RS" \
+kubectl get service pr-482 \
   -o jsonpath='{.metadata.ownerReferences}{"\n"}'
 ```
 
-A Deployment-managed ReplicaSet has an owner reference to the Deployment.
+Both should point at:
+
+```text
+PreviewEnvironment/pr-482
+```
+
+The relationship is:
+
+```text
+PreviewEnvironment/pr-482
+       |
+       +-- Deployment/pr-482
+       |        |
+       |        v
+       |     ReplicaSet
+       |        |
+       |        v
+       |       Pods
+       |
+       +-- Service/pr-482
+```
+
+Compare that with the built-in chain we saw earlier:
 
 ```text
 Deployment
@@ -5843,17 +6846,7 @@ ReplicaSet
 Pod
 ```
 
-A custom controller can use the same mechanism:
-
-```text
-PreviewEnvironment
-       |
-       +-- Deployment
-       |
-       +-- Service
-```
-
-Ownership helps Kubernetes determine controller responsibility and garbage collection.
+Our controller is using the same Kubernetes ownership mechanism as built-in controllers.
 
 Labels and ownership are not the same thing:
 
@@ -5865,18 +6858,163 @@ ownerReference
   -> which object controls this dependent resource?
 ```
 
-## Finalizers
+## Controller responsibility: delete a child
 
-Sometimes deleting an API object must trigger cleanup outside that object first.
+Delete the generated Service:
 
-Examples could include:
+```bash
+kubectl delete service pr-482
+```
 
-- delete a cloud database
-- release a load balancer
-- remove DNS records
-- detach external storage
+Watch the labelled Service set:
 
-A finalizer delays final deletion until responsible cleanup logic removes the finalizer.
+```bash
+kubectl get service   -l platform.example.com/preview=pr-482   -w
+```
+
+Within a reconciliation cycle, the Service should reappear.
+
+That happened because our controller still sees:
+
+```text
+PreviewEnvironment/pr-482 exists
+        |
+        v
+Service/pr-482 should exist
+```
+
+Ownership did not recreate the Service.
+
+**Reconciliation did.**
+
+That distinction matters.
+
+Owner references describe relationships and enable garbage collection; controllers are the actors that continuously restore desired state.
+
+## Status: report observed state through the API
+
+Chapter 33 gave the CRD a `status` subresource.
+
+Chapter 34 made the controller populate it.
+
+Inspect it:
+
+```bash
+kubectl get preview pr-482 \
+  -o jsonpath='{.spec.replicas}{" desired, "}{.status.readyReplicas}{" ready, "}{.status.url}{"\n"}'
+```
+
+You should see something like:
+
+```text
+3 desired, 3 ready, http://pr-482.cookbook.svc.cluster.local
+```
+
+We have now implemented the same pattern we met in Chapter 1:
+
+```text
+spec
+  -> what the user wants
+
+status
+  -> what the controller currently observes
+```
+
+A useful custom API should let normal operational questions be answered from the API.
+
+Users should not have to start with controller logs simply to discover whether the requested system is ready.
+
+### Conditions
+
+Our tiny controller deliberately reports only two status fields.
+
+Larger APIs commonly expose structured conditions:
+
+```yaml
+status:
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: DeploymentAvailable
+```
+
+Common condition concepts include:
+
+```text
+Ready
+Available
+Progressing
+Degraded
+```
+
+Conditions are especially useful when `readyReplicas: 1` is not enough to explain *why* the system is not ready.
+
+## Garbage collection: delete the owner
+
+Now delete the `PreviewEnvironment` itself:
+
+```bash
+kubectl delete preview pr-482
+```
+
+Watch its children:
+
+```bash
+kubectl get deployment,service \
+  -l platform.example.com/preview=pr-482 \
+  -w
+```
+
+Because the Deployment and Service contain owner references to the custom resource, Kubernetes garbage collection can remove them when the owner disappears.
+
+The path is:
+
+```text
+PreviewEnvironment deleted
+        |
+        v
+ownerReferences become invalid
+        |
+        v
+garbage collector removes dependants
+```
+
+Our controller does not need explicit code saying:
+
+```text
+on PreviewEnvironment delete:
+    delete Deployment
+    delete Service
+```
+
+for these Kubernetes-native child resources.
+
+Recreate the preview so the rest of the chapter can continue:
+
+```bash
+kubectl apply -f preview.yaml
+kubectl wait   --for=create   deployment/pr-482   --timeout=30s
+kubectl rollout status deployment/pr-482
+```
+
+## Finalizers: cleanup that garbage collection cannot perform for you
+
+Owner references work well for Kubernetes objects.
+
+But suppose our controller also created something **outside** Kubernetes:
+
+```text
+DNS record
+cloud database
+SaaS tenant
+external load balancer
+```
+
+Kubernetes garbage collection cannot delete an external database merely because an API object disappeared.
+
+That is where finalizers fit.
+
+A finalizer delays final deletion until responsible cleanup logic has completed.
 
 Create a harmless demo object:
 
@@ -5913,7 +7051,20 @@ deletionTimestamp: ...
 
 The object is pending deletion because its finalizer remains.
 
-A real controller would now perform cleanup and then remove its finalizer.
+A real controller would now:
+
+```text
+observe deletionTimestamp
+        |
+        v
+perform external cleanup
+        |
+        v
+remove its finalizer
+        |
+        v
+Kubernetes completes deletion
+```
 
 For the lab, remove it manually:
 
@@ -5944,54 +7095,9 @@ stuck Terminating
 
 The object may be waiting for a controller to finish a cleanup contract.
 
-## Status and conditions
+## Operator: controller plus domain knowledge
 
-A well-designed custom API separates:
-
-```text
-spec
-  -> what the user wants
-
-status
-  -> what the controller currently observes
-```
-
-Example:
-
-```yaml
-spec:
-  image: shop:pr-482
-  replicas: 2
-
-status:
-  readyReplicas: 2
-  url: https://pr-482.example.com
-```
-
-Structured conditions make normal operational state visible through the API:
-
-```yaml
-status:
-  conditions:
-    - type: Ready
-      status: "True"
-      reason: DeploymentAvailable
-```
-
-Common condition concepts include:
-
-```text
-Ready
-Available
-Progressing
-Degraded
-```
-
-A good controller should not force users to read controller logs merely to determine normal resource state.
-
-## Operators
-
-An Operator is not a special class of executable understood by Kubernetes.
+An Operator is not a special executable type understood by Kubernetes.
 
 Think:
 
@@ -6003,7 +7109,15 @@ Controller
 Domain knowledge
 ```
 
-For a database API:
+Our `PreviewEnvironment` controller knows only a tiny domain rule:
+
+```text
+PreviewEnvironment
+    -> nginx-compatible Deployment
+    -> Service on port 80
+```
+
+A database Operator might understand much more:
 
 ```yaml
 kind: DatabaseCluster
@@ -6012,7 +7126,7 @@ spec:
   replicas: 3
 ```
 
-The Operator might understand how to:
+and reconcile operations such as:
 
 ```text
 create members
@@ -6024,9 +7138,13 @@ rotate credentials
 perform upgrades
 ```
 
-That is still the same reconciliation model used by Deployments, applied to a domain with richer operational knowledge.
+It is still the same reconciliation model.
+
+The domain knowledge is richer.
 
 ## Controller failure modes
+
+Writing a controller makes several failure modes easier to understand.
 
 ### Non-idempotent reconciliation
 
@@ -6039,9 +7157,29 @@ Every reconcile creates another cloud database.
 Better:
 
 ```text
-Check whether the required database exists.
+Ensure the required database exists.
 Create it only when absent.
 Update it only when desired state differs.
+```
+
+Our lab controller used server-side apply for exactly this reason:
+
+```text
+same desired child object
+        |
+        v
+apply repeatedly
+        |
+        v
+convergent state
+```
+
+rather than:
+
+```text
+reconcile #1 -> Deployment A
+reconcile #2 -> Deployment B
+reconcile #3 -> Deployment C
 ```
 
 ### Update loops
@@ -6058,12 +7196,14 @@ watch event
 reconcile
         |
         v
-controller writes same state again
+controller writes identical state again
         |
         +------ loop
 ```
 
 Only write when state actually differs.
+
+Our status code checks whether `readyReplicas` or `url` changed before issuing another status update.
 
 ### Fighting controllers
 
@@ -6081,11 +7221,17 @@ controller A writes X
       +---- forever
 ```
 
+Server-side apply field ownership can help make those conflicts explicit, but it does not make contradictory intent disappear.
+
 ### Status that lies
 
 Do not report `Ready=True` merely because a child object was created.
 
 Report what the API contract says readiness means.
+
+For our preview API, `readyReplicas` comes from the child Deployment's observed status rather than simply copying `spec.replicas`.
+
+That difference is the entire point of status.
 
 A controller is useful when it turns desired state into truthful, convergent behaviour.
 
@@ -6093,13 +7239,33 @@ A controller is useful when it turns desired state into truthful, convergent beh
 
 # 36. Clean Up the Custom API [DEV]
 
-Delete the Custom Resource first:
+We deliberately kept the controller running so Chapters 34 and 35 could build on the same system.
+
+Clean it up in dependency order.
+
+## Delete the Custom Resource
 
 ```bash
-kubectl delete preview pr-482
+kubectl delete preview pr-482 --ignore-not-found
 ```
 
-Delete the CRD:
+Its owned Deployment and Service should disappear through garbage collection.
+
+Check:
+
+```bash
+kubectl get deployment,service \
+  -l platform.example.com/preview=pr-482
+```
+
+## Delete the controller workload and RBAC
+
+```bash
+kubectl delete -f controller-deployment.yaml --ignore-not-found
+kubectl delete -f controller-rbac.yaml --ignore-not-found
+```
+
+## Delete the CRD
 
 ```bash
 kubectl delete crd \
@@ -6110,11 +7276,47 @@ Deleting a CRD deletes the custom resources stored through that API.
 
 Only do this casually in a disposable lab environment.
 
-Remove local files:
+## Remove the local lab files
+
+If you created the Go controller under `/tmp`:
 
 ```bash
-rm -f preview.yaml preview-crd.yaml
+rm -rf /tmp/preview-controller
 ```
+
+Remove manifests from the current directory if present:
+
+```bash
+rm -f \
+  preview.yaml \
+  preview-crd.yaml \
+  controller-rbac.yaml \
+  controller-deployment.yaml
+```
+
+We have now traversed the full extension lifecycle:
+
+```text
+CRD
+  -> API type exists
+
+Custom Resource
+  -> desired state exists
+
+Controller
+  -> behaviour exists
+
+ownerReferences
+  -> child relationships exist
+
+status
+  -> observed state is reported
+
+finalizers
+  -> external cleanup can become part of deletion
+```
+
+That is the same Kubernetes control model, extended with our own API and code.
 
 ---
 
@@ -6660,6 +7862,10 @@ Covered by:
 - NetworkPolicy
 - Ingress
 
+Supplemental deep dive:
+
+- Gateway API concepts and hands-on Cilium Gateway API in `cillium-gateay-appendix.md`
+
 ---
 
 # Appendix C - Official References
@@ -6671,6 +7877,10 @@ Prefer current official documentation when a field, API version or exam detail i
 - kubectl reference: https://kubernetes.io/docs/reference/kubectl/
 - CKAD certification: https://www.cncf.io/training/certification/ckad/
 - Linux Foundation CKAD page: https://training.linuxfoundation.org/certification/certified-kubernetes-application-developer-ckad/
+- Gateway API documentation: https://gateway-api.sigs.k8s.io/
+- client-go: https://github.com/kubernetes/client-go
+- client-go controller architecture: https://github.com/kubernetes/client-go/blob/master/ARCHITECTURE.md
+- Roman Glushko Gateway API deep dive: https://www.romaglushko.com/blog/k8s-gateway-api/
 
 The habit this cookbook is trying to teach is simple:
 

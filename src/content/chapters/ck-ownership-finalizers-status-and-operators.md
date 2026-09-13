@@ -4,34 +4,47 @@ They are not arbitrary advanced features.
 
 They help controllers express responsibility, cleanup and observed state.
 
-## Ownership
+We now have our own controller running, so we can inspect these mechanisms on something we built rather than only discussing them in the abstract.
 
-We already have a live built-in example.
+## Ownership: which object is responsible for this child?
 
-Inspect one Deployment Pod:
+First inspect the Deployment created for our preview:
 
 ```bash
-POD=$(kubectl get pod -l app=api \
-  -o jsonpath='{.items[0].metadata.name}')
-
-kubectl get pod "$POD" \
+kubectl get deployment pr-482 \
   -o jsonpath='{.metadata.ownerReferences}{"\n"}'
 ```
 
-The Pod is owned by a ReplicaSet.
-
-Inspect the ReplicaSet:
+Then the Service:
 
 ```bash
-RS=$(kubectl get rs -l app=api \
-  --sort-by=.metadata.creationTimestamp \
-  -o jsonpath='{.items[-1:].metadata.name}')
-
-kubectl get rs "$RS" \
+kubectl get service pr-482 \
   -o jsonpath='{.metadata.ownerReferences}{"\n"}'
 ```
 
-A Deployment-managed ReplicaSet has an owner reference to the Deployment.
+Both should point at:
+
+```text
+PreviewEnvironment/pr-482
+```
+
+The relationship is:
+
+```text
+PreviewEnvironment/pr-482
+       |
+       +-- Deployment/pr-482
+       |        |
+       |        v
+       |     ReplicaSet
+       |        |
+       |        v
+       |       Pods
+       |
+       +-- Service/pr-482
+```
+
+Compare that with the built-in chain we saw earlier:
 
 ```text
 Deployment
@@ -43,17 +56,7 @@ ReplicaSet
 Pod
 ```
 
-A custom controller can use the same mechanism:
-
-```text
-PreviewEnvironment
-       |
-       +-- Deployment
-       |
-       +-- Service
-```
-
-Ownership helps Kubernetes determine controller responsibility and garbage collection.
+Our controller is using the same Kubernetes ownership mechanism as built-in controllers.
 
 Labels and ownership are not the same thing:
 
@@ -65,18 +68,163 @@ ownerReference
   -> which object controls this dependent resource?
 ```
 
-## Finalizers
+## Controller responsibility: delete a child
 
-Sometimes deleting an API object must trigger cleanup outside that object first.
+Delete the generated Service:
 
-Examples could include:
+```bash
+kubectl delete service pr-482
+```
 
-- delete a cloud database
-- release a load balancer
-- remove DNS records
-- detach external storage
+Watch the labelled Service set:
 
-A finalizer delays final deletion until responsible cleanup logic removes the finalizer.
+```bash
+kubectl get service   -l platform.example.com/preview=pr-482   -w
+```
+
+Within a reconciliation cycle, the Service should reappear.
+
+That happened because our controller still sees:
+
+```text
+PreviewEnvironment/pr-482 exists
+        |
+        v
+Service/pr-482 should exist
+```
+
+Ownership did not recreate the Service.
+
+**Reconciliation did.**
+
+That distinction matters.
+
+Owner references describe relationships and enable garbage collection; controllers are the actors that continuously restore desired state.
+
+## Status: report observed state through the API
+
+Chapter 33 gave the CRD a `status` subresource.
+
+Chapter 34 made the controller populate it.
+
+Inspect it:
+
+```bash
+kubectl get preview pr-482 \
+  -o jsonpath='{.spec.replicas}{" desired, "}{.status.readyReplicas}{" ready, "}{.status.url}{"\n"}'
+```
+
+You should see something like:
+
+```text
+3 desired, 3 ready, http://pr-482.cookbook.svc.cluster.local
+```
+
+We have now implemented the same pattern we met in Chapter 1:
+
+```text
+spec
+  -> what the user wants
+
+status
+  -> what the controller currently observes
+```
+
+A useful custom API should let normal operational questions be answered from the API.
+
+Users should not have to start with controller logs simply to discover whether the requested system is ready.
+
+### Conditions
+
+Our tiny controller deliberately reports only two status fields.
+
+Larger APIs commonly expose structured conditions:
+
+```yaml
+status:
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: DeploymentAvailable
+```
+
+Common condition concepts include:
+
+```text
+Ready
+Available
+Progressing
+Degraded
+```
+
+Conditions are especially useful when `readyReplicas: 1` is not enough to explain *why* the system is not ready.
+
+## Garbage collection: delete the owner
+
+Now delete the `PreviewEnvironment` itself:
+
+```bash
+kubectl delete preview pr-482
+```
+
+Watch its children:
+
+```bash
+kubectl get deployment,service \
+  -l platform.example.com/preview=pr-482 \
+  -w
+```
+
+Because the Deployment and Service contain owner references to the custom resource, Kubernetes garbage collection can remove them when the owner disappears.
+
+The path is:
+
+```text
+PreviewEnvironment deleted
+        |
+        v
+ownerReferences become invalid
+        |
+        v
+garbage collector removes dependants
+```
+
+Our controller does not need explicit code saying:
+
+```text
+on PreviewEnvironment delete:
+    delete Deployment
+    delete Service
+```
+
+for these Kubernetes-native child resources.
+
+Recreate the preview so the rest of the chapter can continue:
+
+```bash
+kubectl apply -f preview.yaml
+kubectl wait   --for=create   deployment/pr-482   --timeout=30s
+kubectl rollout status deployment/pr-482
+```
+
+## Finalizers: cleanup that garbage collection cannot perform for you
+
+Owner references work well for Kubernetes objects.
+
+But suppose our controller also created something **outside** Kubernetes:
+
+```text
+DNS record
+cloud database
+SaaS tenant
+external load balancer
+```
+
+Kubernetes garbage collection cannot delete an external database merely because an API object disappeared.
+
+That is where finalizers fit.
+
+A finalizer delays final deletion until responsible cleanup logic has completed.
 
 Create a harmless demo object:
 
@@ -113,7 +261,20 @@ deletionTimestamp: ...
 
 The object is pending deletion because its finalizer remains.
 
-A real controller would now perform cleanup and then remove its finalizer.
+A real controller would now:
+
+```text
+observe deletionTimestamp
+        |
+        v
+perform external cleanup
+        |
+        v
+remove its finalizer
+        |
+        v
+Kubernetes completes deletion
+```
 
 For the lab, remove it manually:
 
@@ -144,54 +305,9 @@ stuck Terminating
 
 The object may be waiting for a controller to finish a cleanup contract.
 
-## Status and conditions
+## Operator: controller plus domain knowledge
 
-A well-designed custom API separates:
-
-```text
-spec
-  -> what the user wants
-
-status
-  -> what the controller currently observes
-```
-
-Example:
-
-```yaml
-spec:
-  image: shop:pr-482
-  replicas: 2
-
-status:
-  readyReplicas: 2
-  url: https://pr-482.example.com
-```
-
-Structured conditions make normal operational state visible through the API:
-
-```yaml
-status:
-  conditions:
-    - type: Ready
-      status: "True"
-      reason: DeploymentAvailable
-```
-
-Common condition concepts include:
-
-```text
-Ready
-Available
-Progressing
-Degraded
-```
-
-A good controller should not force users to read controller logs merely to determine normal resource state.
-
-## Operators
-
-An Operator is not a special class of executable understood by Kubernetes.
+An Operator is not a special executable type understood by Kubernetes.
 
 Think:
 
@@ -203,7 +319,15 @@ Controller
 Domain knowledge
 ```
 
-For a database API:
+Our `PreviewEnvironment` controller knows only a tiny domain rule:
+
+```text
+PreviewEnvironment
+    -> nginx-compatible Deployment
+    -> Service on port 80
+```
+
+A database Operator might understand much more:
 
 ```yaml
 kind: DatabaseCluster
@@ -212,7 +336,7 @@ spec:
   replicas: 3
 ```
 
-The Operator might understand how to:
+and reconcile operations such as:
 
 ```text
 create members
@@ -224,9 +348,13 @@ rotate credentials
 perform upgrades
 ```
 
-That is still the same reconciliation model used by Deployments, applied to a domain with richer operational knowledge.
+It is still the same reconciliation model.
+
+The domain knowledge is richer.
 
 ## Controller failure modes
+
+Writing a controller makes several failure modes easier to understand.
 
 ### Non-idempotent reconciliation
 
@@ -239,9 +367,29 @@ Every reconcile creates another cloud database.
 Better:
 
 ```text
-Check whether the required database exists.
+Ensure the required database exists.
 Create it only when absent.
 Update it only when desired state differs.
+```
+
+Our lab controller used server-side apply for exactly this reason:
+
+```text
+same desired child object
+        |
+        v
+apply repeatedly
+        |
+        v
+convergent state
+```
+
+rather than:
+
+```text
+reconcile #1 -> Deployment A
+reconcile #2 -> Deployment B
+reconcile #3 -> Deployment C
 ```
 
 ### Update loops
@@ -258,12 +406,14 @@ watch event
 reconcile
         |
         v
-controller writes same state again
+controller writes identical state again
         |
         +------ loop
 ```
 
 Only write when state actually differs.
+
+Our status code checks whether `readyReplicas` or `url` changed before issuing another status update.
 
 ### Fighting controllers
 
@@ -281,10 +431,16 @@ controller A writes X
       +---- forever
 ```
 
+Server-side apply field ownership can help make those conflicts explicit, but it does not make contradictory intent disappear.
+
 ### Status that lies
 
 Do not report `Ready=True` merely because a child object was created.
 
 Report what the API contract says readiness means.
+
+For our preview API, `readyReplicas` comes from the child Deployment's observed status rather than simply copying `spec.replicas`.
+
+That difference is the entire point of status.
 
 A controller is useful when it turns desired state into truthful, convergent behaviour.

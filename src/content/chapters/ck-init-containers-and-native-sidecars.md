@@ -1,5 +1,13 @@
 Different supporting containers solve different lifecycle problems.
 
+The useful question is not:
+
+> How many containers can a Pod contain?
+
+It is:
+
+> What lifecycle relationship does this supporting process have with the application?
+
 ## Init container: do work before the application starts
 
 Use an init container when setup must complete successfully before normal application containers begin.
@@ -69,6 +77,15 @@ init container completes
 application container starts
 ```
 
+Inspect the separate status lists:
+
+```bash
+kubectl get pod init-demo \
+  -o jsonpath='{range .status.initContainerStatuses[*]}init:{.name}={.state.terminated.reason}{"\n"}{end}{range .status.containerStatuses[*]}app:{.name}={.state.running.startedAt}{"\n"}{end}'
+```
+
+The init container terminated successfully before nginx began its normal lifetime.
+
 Cleanup:
 
 ```bash
@@ -76,17 +93,27 @@ kubectl delete pod init-demo
 rm -f init-demo.yaml
 ```
 
-## Native sidecar: supporting process for the Pod lifetime
+## Native sidecar: start in init ordering, then stay alive
 
-Modern Kubernetes implements native sidecars as restartable init containers using:
+Native sidecars are restartable init containers.
+
+They use:
 
 ```yaml
 restartPolicy: Always
 ```
 
-Example fragment:
+Unlike an ordinary init container, the sidecar does not need to finish before the application can keep running.
+
+Let's prove that.
+
+Save as `sidecar-demo.yaml`:
 
 ```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: sidecar-demo
 spec:
   initContainers:
     - name: log-forwarder
@@ -95,23 +122,75 @@ spec:
       command:
         - sh
         - -c
-        - tail -F /logs/app.log
+        - |
+          touch /logs/app.log
+          tail -F /logs/app.log
+      volumeMounts:
+        - name: logs
+          mountPath: /logs
+
+  containers:
+    - name: app
+      image: busybox:1.36
+      command:
+        - sh
+        - -c
+        - |
+          i=0
+          while true; do
+            i=$((i + 1))
+            echo "application message $i" >> /logs/app.log
+            sleep 2
+          done
+      volumeMounts:
+        - name: logs
+          mountPath: /logs
+
+  volumes:
+    - name: logs
+      emptyDir: {}
 ```
 
-The important lifecycle difference is:
+Apply and wait:
+
+```bash
+kubectl apply -f sidecar-demo.yaml
+kubectl wait \
+  --for=condition=Ready \
+  pod/sidecar-demo \
+  --timeout=60s
+```
+
+Now read the sidecar logs:
+
+```bash
+kubectl logs sidecar-demo \
+  -c log-forwarder \
+  --tail=5
+```
+
+You should see the application messages even though the log-forwarder was declared under `initContainers`.
+
+Inspect its state:
+
+```bash
+kubectl get pod sidecar-demo \
+  -o jsonpath='{range .status.initContainerStatuses[*]}{.name}{" running="}{.state.running.startedAt}{" restarts="}{.restartCount}{"\n"}{end}'
+```
+
+The slightly surprising result is:
 
 ```text
-regular init container
-    -> starts
-    -> completes
-    -> application can continue
-
-native sidecar
-    -> starts in init ordering
-    -> remains running with the Pod
+spec.initContainers
+        |
+        +-- ordinary init container -> eventually terminates
+        |
+        +-- restartPolicy: Always   -> remains running as a sidecar
 ```
 
-Good sidecar examples include:
+That is why native sidecars can participate in init ordering while still living for the Pod lifetime.
+
+Good uses include:
 
 - log forwarding
 - local proxying
@@ -121,3 +200,10 @@ Good sidecar examples include:
 Use a sidecar when the supporting functionality genuinely belongs to the same Pod lifecycle.
 
 Do not group unrelated services into one Pod merely because Kubernetes allows multiple containers.
+
+Cleanup:
+
+```bash
+kubectl delete pod sidecar-demo
+rm -f sidecar-demo.yaml
+```

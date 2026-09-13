@@ -25,6 +25,24 @@ const BASH =
 const YAML =
   /(?<cmt>#[^\n]*)|(?<str>'[^']*'|"(?:[^"\\]|\\.)*")|(?<key>[\w.\-/]+(?=\s*:(?:\s|$)))|(?<num>\b\d+(?:\.\d+)?[A-Za-z%]*\b|\b(?:true|false|null|Always|Never|IfNotPresent)\b)|(?<punct>^\s*-(?=\s)|[:{}[\],])/gm
 
+const GO_WORDS =
+  'package|import|func|return|if|else|for|range|switch|case|default|break|continue|go|defer|var|const|type|struct|interface|map|chan|select|fallthrough'
+
+const GO = new RegExp(
+  [
+    String.raw`(?<cmt>\/\/[^\n]*)`,
+    // backtick strings carry the embedded YAML and JSON patches in this course
+    String.raw`(?<str>\`[^\`]*\`|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')`,
+    String.raw`(?<key>\b(?:${GO_WORDS})\b)`,
+    String.raw`(?<num>\b(?:nil|true|false|iota|err)\b|\b\d+(?:\.\d+)?\b)`,
+    String.raw`(?<cmd>\b[A-Za-z_]\w*(?=\())`,
+    String.raw`(?<punct>[{}()[\].,;:=&*<>!+\-|]+)`,
+  ].join('|'),
+  'g',
+)
+
+const SHELLS = new Set(['bash', 'sh', 'shell', 'zsh', 'console', 'powershell'])
+
 /** Words that start a command but are not the interesting part of it. */
 const PREFIXES = new Set(['sudo', 'export', 'source', 'time', 'exec', 'command'])
 
@@ -75,7 +93,8 @@ function shellLine(line: string): Token[] {
 export function highlight(code: string, lang: string): Token[][] {
   const lines = code.replace(/\n$/, '').split('\n')
   if (lang === 'yaml') return lines.map((l) => scan(l, YAML))
-  if (lang === 'bash' || lang === 'powershell' || lang === 'dockerfile') {
+  if (lang === 'go') return lines.map((l) => scan(l, GO))
+  if (SHELLS.has(lang) || lang === 'dockerfile') {
     let inHeredoc: string | null = null
     return lines.map((line) => {
       if (inHeredoc !== null) {
@@ -89,6 +108,10 @@ export function highlight(code: string, lang: string): Token[][] {
     })
   }
   return lines.map((l) => [{ text: l, kind: 'plain' as const }])
+}
+
+export function isShell(lang: string) {
+  return SHELLS.has(lang)
 }
 
 /**

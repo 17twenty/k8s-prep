@@ -181,3 +181,33 @@ on GitHub being reachable.
 
 Still hand-written editorial (acceptable, but it can drift): the four "Before you
 cast off" prerequisite cards in `overview.tsx`.
+- 2026-09-13T14:39:45+10:00 ## k8s-prep — code-fence languages are open-set; new ones need two lines
+
+Sept 2026 cookbook update added `sh` (3 blocks) and `dockerfile` fences plus a
+**203-line Go controller** (ch34 "Build a Tiny Go Controller"). Two latent bugs
+this exposed — check for them whenever the gist gains a language:
+
+1. **Shell dialects were hardcoded to `bash`/`powershell`.** `sh` fell through to
+   `OutputBlock`, so real commands rendered as quiet, promptless, uncopyable
+   output. Now `SHELLS` in `highlight.ts` = bash|sh|shell|zsh|console|powershell,
+   exported as `isShell()`, and `LISTINGS` in `code.tsx` = yaml|go|json|html|
+   dockerfile|toml|ini. **Adding a language = one set membership + optionally a
+   regex.** Unrecognised fences still degrade safely to output/figure.
+2. `measure()` in the build script counted only bash/powershell as "runnable",
+   so `sh` chapters were mis-marked `brief` and under-timed. Keep that list in
+   sync with `SHELLS`.
+
+Added a **Go tokenizer** (`GO` regex in highlight.ts) reusing existing token
+classes — `key`→keywords, `cmd`→function calls, `str`, `num`(incl nil/true/false),
+`cmt`, `punct`. No new CSS.
+
+Listing blocks now: gutter width from `String(lines.length).length` + `ch` units
+(was fixed `w-5`, which broke at 3 digits), `tabSize: 2` (Go uses tabs; default 8
+overflows the 42rem column), and **`<Fold>` for >40 lines** with a "Show all N
+lines" overlay button. Both ShellBlock and ManifestBlock fold.
+
+Totals after this sync: 155 chapters, 729 command blocks, 15h 45m.
+Only 2 ids moved (ch26 and ch34 renamed upstream).
+
+NOTE: the user runs `npm run sync`/`content` themselves and commits — don't assume
+`git show HEAD:content/...` is the previous sync state when diffing.

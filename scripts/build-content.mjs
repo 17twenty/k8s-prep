@@ -214,7 +214,7 @@ function subheadings(body) {
 
 function measure(body) {
   const runnable = [...body.matchAll(/^```(\w*)$/gm)].filter((f) =>
-    ['bash', 'powershell'].includes(f[1]),
+    ['bash', 'sh', 'shell', 'zsh', 'console', 'powershell'].includes(f[1]),
   ).length
   const prose = body.replace(/^```[\s\S]*?^```/gm, '')
   const words = prose.split(/\s+/).filter(Boolean).length
